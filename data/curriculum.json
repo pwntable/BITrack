@@ -1,0 +1,110 @@
+{
+  "program_name": "Bachelor of Information Technology with Honours (BIT)",
+  "total_credits_required": 120,
+  "curriculum": [
+    {
+      "year": 1,
+      "semesters": [
+        {
+          "semester": 1,
+          "total_credits": 20,
+          "subjects": [
+            { "code": "UHB 13102", "name": "English for General Communication", "credits": 2 },
+            { "code": "UQ 11", "name": "Ko-Kurikulum I", "credits": 1 },
+            { "code": "UQI 10102", "name": "Pengajian Islam", "credits": 2 },
+            { "code": "UQI 10202", "name": "Pengajian Moral", "credits": 2 },
+            { "code": "BIT 20303", "name": "Senibina Komputer", "credits": 3 },
+            { "code": "BIT 10103", "name": "Kejuruteraan Perisian", "credits": 3 },
+            { "code": "BIT 10303", "name": "Pengaturcaraan Komputer", "credits": 3 },
+            { "code": "BIT 11003", "name": "Struktur Diskrit", "credits": 3 },
+            { "code": "BIT 21403", "name": "Asas Keselamatan Maklumat", "credits": 3 }
+          ]
+        },
+        {
+          "semester": 2,
+          "total_credits": 20,
+          "subjects": [
+            { "code": "UQ 11", "name": "Ko-Kurikulum II", "credits": 1 },
+            { "code": "UHB 1**02", "name": "Bahasa Asing **", "credits": 2 },
+            { "code": "UQI ***02", "name": "Falsafah dan Cabaran Semasa", "credits": 2 },
+            { "code": "BIT 20403", "name": "Sistem Pengoperasian", "credits": 3 },
+            { "code": "BIT 20103", "name": "Analisis dan Rekabentuk Sistem", "credits": 3 },
+            { "code": "BIT 20703", "name": "Rangkaian dan Komunikasi Data", "credits": 3 },
+            { "code": "BIT 10703", "name": "Struktur Data dan Algoritma", "credits": 3 },
+            { "code": "BIT 20603", "name": "Pengaturcaraan Berorientasikan Objek", "credits": 3 }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 2,
+      "semesters": [
+        {
+          "semester": 3,
+          "total_credits": 9,
+          "subjects": [
+            { "code": "BIT 21303", "name": "Interaksi Manusia-Komputer", "credits": 3 },
+            { "code": "BIT 13103", "name": "Etika Profesional dan Keselamatan", "credits": 3 },
+            { "code": "BIT ****3", "name": "Elektif I", "credits": 3, "is_elective": true }
+          ]
+        },
+        {
+          "semester": 4,
+          "total_credits": 19,
+          "subjects": [
+            { "code": "UHB 23102", "name": "English for Technical Communication", "credits": 2 },
+            { "code": "UQU  02", "name": "Aspirasi Negara Bangsa", "credits": 2 },
+            { "code": "BIT 20803", "name": "Sistem Pangkalan Data", "credits": 3 },
+            { "code": "BIT 21503", "name": "Pembangunan Web", "credits": 3 },
+            { "code": "BIT 34103", "name": "Pembangunan Aplikasi Mudah Alih", "credits": 3 },
+            { "code": "BIT 3", "name": "Elektif II", "credits": 3, "is_elective": true },
+            { "code": "BIT 21603", "name": "Teknokeusahawanan", "credits": 3 }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 3,
+      "semesters": [
+        {
+          "semester": 5,
+          "total_credits": 20,
+          "subjects": [
+            { "code": "BIT 22103", "name": "Teknologi Sistem Bersepadu", "credits": 3 },
+            { "code": "BIT 22203", "name": "Rangkaian Lanjutan", "credits": 3 },
+            { "code": "BIT 34002", "name": "Projek Sarjana Muda I", "credits": 2 },
+            { "code": "BIT 22303", "name": "Pengurusan Maklumat", "credits": 3 },
+            { "code": "BIT 3", "name": "Elektif III", "credits": 3, "is_elective": true },
+            { "code": "BIT 3", "name": "Elektif IV", "credits": 3, "is_elective": true },
+            { "code": "BIT 22403", "name": "Paradigma Sistem", "credits": 3 }
+          ]
+        },
+        {
+          "semester": 6,
+          "total_credits": 20,
+          "subjects": [
+            { "code": "UHB 33102", "name": "English for Professional Communication", "credits": 2 },
+            { "code": "UQU11202", "name": "Integriti dan Antirasuah", "credits": 2 },
+            { "code": "BIT 34204", "name": "Projek Sarjana Muda II", "credits": 4 },
+            { "code": "BIT 20503", "name": "Kreativiti Dan Inovasi", "credits": 3 },
+            { "code": "BIT 35103", "name": "Pengkomputeran Awan", "credits": 3 },
+            { "code": "BIT ****3", "name": "Elektif V", "credits": 3, "is_elective": true },
+            { "code": "BIT 3", "name": "Elektif VI", "credits": 3, "is_elective": true }
+          ]
+        }
+      ]
+    },
+    {
+      "year": 4,
+      "semesters": [
+        {
+          "semester": 7,
+          "total_credits": 12,
+          "subjects": [
+            { "code": "BIT 40112", "name": "Latihan Industri", "credits": 12 }
+          ]
+        }
+      ]
+    }
+  ]
+}

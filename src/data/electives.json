@@ -1,0 +1,14 @@
+[
+  { "code": "BIT 20903", "name": "Kecerdasan Buatan", "credits": 3, "prerequisite": null },
+  { "code": "BIT 30303", "name": "Sistem Bantuan Keputusan", "credits": 3, "prerequisite": null },
+  { "code": "BIT 30603", "name": "Pengurusan Perhubungan Pelanggan", "credits": 3, "prerequisite": null },
+  { "code": "BIT 33603", "name": "Pelombongan Data", "credits": 3, "prerequisite": null },
+  { "code": "BIT 33703", "name": "Pembangunan Sistem Fuzzy", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34303", "name": "Pembelajaran Mesin", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34403", "name": "Pembelajaran Mendalam", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34503", "name": "Sains Data", "credits": 3, "prerequisite": null },
+  { "code": "UQU40103", "name": "Profesional@Works", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34603", "name": "Topik-topik Khas Teknologi Maklumat", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34703", "name": "Analitik Visual", "credits": 3, "prerequisite": null },
+  { "code": "BIT 34803", "name": "Etika dalam Kepintaran Buatan", "credits": 3, "prerequisite": null }
+]
