@@ -193,7 +193,7 @@ export function CurriculumChecklist() {
 
                                 {isCompleted && (
                                   <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
+                                    <DropdownMenuTrigger>
                                       <Badge className={`shrink-0 cursor-pointer flex items-center gap-1 text-[10px] font-bold transition-all active:scale-95 ${getGradeColor(completedGrade)}`}>
                                         {completedGrade}
                                         <ChevronDown className="h-2.5 w-2.5 opacity-70" />
