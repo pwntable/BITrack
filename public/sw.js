@@ -1,9 +1,9 @@
 const CACHE_NAME = 'bitrack-v1';
 const ASSETS = [
-  './',
-  './manifest.json',
-  './icon-192x192.png',
-  './icon-512x512.png'
+  '/BITrack/',
+  '/BITrack/manifest.json',
+  '/BITrack/icon-192x192.png',
+  '/BITrack/icon-512x512.png'
 ];
 
 self.addEventListener('install', (event) => {
