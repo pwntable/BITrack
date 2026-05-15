@@ -11,7 +11,12 @@ export async function runOcrBatch(images: HTMLCanvasElement[], onProgress?: (com
   try {
     // 1. Spin up workers in parallel
     const workerPromises = Array.from({ length: numWorkers }).map(() =>
-      createWorker('eng')
+      createWorker('eng', 1, {
+        logger: m => console.log('[Tesseract]', m)
+      }).catch(err => {
+        console.error('[Tesseract] Worker creation failed:', err);
+        throw new Error('Failed to initialize OCR engine. Check your internet connection.');
+      })
     );
     
     // Wait for all workers to initialize

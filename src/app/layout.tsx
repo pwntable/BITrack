@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "BITrack — Academic Progress Tracker",
   description: "Premium 120-credit graduation requirement tracker for UTHM BIT students.",
-  manifest: "/manifest.json",
+  manifest: process.env.NODE_ENV === 'production' ? '/BITrack/manifest.json' : '/manifest.json',
   icons: {
     apple: "/icon-192x192.png",
   },
