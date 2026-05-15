@@ -322,7 +322,7 @@ export function TranscriptUploader() {
                 
                 <div className="flex items-center gap-0.5 shrink-0">
                   <Dialog>
-                    <DialogTrigger asChild>
+                    <DialogTrigger>
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary">
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
