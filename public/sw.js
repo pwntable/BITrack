@@ -1,7 +1,7 @@
-const CACHE_NAME = 'bitrack-v1';
+const CACHE_NAME = 'bitrack-v2';
 const ASSETS = [
   '/BITrack/',
-  '/BITrack/manifest.json',
+  '/BITrack/manifest-v2.json',
   '/BITrack/icon-192x192.png',
   '/BITrack/icon-512x512.png'
 ];
