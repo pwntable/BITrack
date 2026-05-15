@@ -110,7 +110,6 @@ export function CurriculumChecklist() {
             <span className="h-px flex-1 bg-white/[0.06]" />
           </div>
           <Accordion 
-            type="multiple" 
             className="w-full space-y-2" 
             value={expandedSems}
             onValueChange={setExpandedSems}
