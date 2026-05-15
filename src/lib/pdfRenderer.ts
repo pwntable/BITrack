@@ -38,7 +38,7 @@ export async function renderPdfToImages(file: File): Promise<HTMLCanvasElement[]
         canvas.height = viewport.height;
         canvas.width = viewport.width;
 
-        const renderContext = {
+        const renderContext: any = {
           canvasContext: context,
           viewport: viewport,
         };
