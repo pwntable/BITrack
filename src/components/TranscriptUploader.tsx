@@ -78,7 +78,7 @@ function FilePreview({ fileId, filename }: { fileId: string; filename: string })
         className="relative overflow-hidden rounded-lg border bg-muted/10 cursor-zoom-in transition-all hover:ring-2 hover:ring-primary/50"
         onClick={handleOpenFullSize}
       >
-        <img src={url} alt="Transcript Preview" className="w-full h-auto max-h-[500px] object-contain transition-transform group-hover:scale-[1.02]" />
+        <img src={url} alt="Transcript Preview" className="w-full h-auto max-h-[200px] sm:max-h-[300px] object-contain transition-transform group-hover:scale-[1.02]" />
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white gap-2">
             <ZoomIn className="h-6 w-6" />
             <span className="text-[10px] font-bold uppercase tracking-widest">View Full Size</span>
@@ -349,9 +349,9 @@ export function TranscriptUploader() {
                         </div>
 
                         {/* Extracted Data */}
-                        <div className="space-y-2">
+                        <div className="space-y-2 flex flex-col">
                           <h5 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Extracted Data</h5>
-                          <div className="space-y-1.5">
+                          <div className="space-y-1.5 max-h-[200px] sm:max-h-[300px] overflow-y-auto pr-1">
                             {item.extractedData?.map((ex, i) => (
                               <div key={i} className="flex items-center justify-between p-2 rounded-lg glass text-xs">
                                 <span className="font-mono font-bold text-white">{ex.code}</span>
