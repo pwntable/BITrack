@@ -25,6 +25,9 @@ export const metadata: Metadata = {
   title: "BITrack — Academic Progress Tracker",
   description: "Premium 120-credit graduation requirement tracker for UTHM BIT students.",
   manifest: "/manifest.json",
+  icons: {
+    apple: "/icon-192x192.png",
+  },
 };
 
 export default function RootLayout({
@@ -38,10 +41,8 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <head>
-        <link rel="manifest" href="/manifest.json" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <link rel="apple-touch-icon" href="/icon-192x192.png" />
       </head>
       <body className="min-h-full flex flex-col">
         {children}
@@ -50,7 +51,8 @@ export default function RootLayout({
           {`
             if ('serviceWorker' in navigator) {
               window.addEventListener('load', function() {
-                navigator.serviceWorker.register('/sw.js');
+                var swPath = window.location.hostname === 'localhost' ? '/sw.js' : '/BITrack/sw.js';
+                navigator.serviceWorker.register(swPath);
               });
             }
           `}

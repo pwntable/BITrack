@@ -11,10 +11,8 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
 
-  // 3. Set basePath if deploying to https://<user>.github.io/<repo>/
-  // Replace 'BITrack' with your actual repository name
-  // basePath: isProd ? '/BITrack' : '',
-  // assetPrefix: isProd ? '/BITrack' : '',
+  basePath: isProd ? '/BITrack' : '',
+  assetPrefix: isProd ? '/BITrack' : '',
 };
 
 export default nextConfig;
