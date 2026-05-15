@@ -173,7 +173,9 @@ export function CurriculumChecklist() {
                                       {subject.code}
                                     </span>
                                     {!prereqMet && !isCompleted && (
-                                      <Lock className="h-3 w-3 text-amber-400/70" title={`Requires ${subject.prerequisite}`} />
+                                      <span title={`Requires ${subject.prerequisite}`}>
+                                        <Lock className="h-3 w-3 text-amber-400/70" />
+                                      </span>
                                     )}
                                   </div>
                                   <span className={`text-xs leading-tight ${
