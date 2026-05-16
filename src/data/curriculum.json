@@ -10,7 +10,7 @@
           "total_credits": 20,
           "subjects": [
             { "code": "UHB 13102", "name": "English for General Communication", "credits": 2, "prerequisite": null },
-            { "code": "UQ 11", "name": "Ko-Kurikulum I", "credits": 1, "prerequisite": null },
+            { "code": "UQ 11 (I)", "name": "Ko-Kurikulum I", "credits": 1, "prerequisite": null },
             { "code": "UQI 10102", "name": "Pengajian Islam", "credits": 2, "prerequisite": null },
             { "code": "UQI 10202", "name": "Pengajian Moral", "credits": 2, "prerequisite": null },
             { "code": "BIT 20303", "name": "Senibina Komputer", "credits": 3, "prerequisite": null },
@@ -24,7 +24,7 @@
           "semester": 2,
           "total_credits": 20,
           "subjects": [
-            { "code": "UQ 11", "name": "Ko-Kurikulum II", "credits": 1, "prerequisite": null },
+            { "code": "UQ 11 (II)", "name": "Ko-Kurikulum II", "credits": 1, "prerequisite": null },
             { "code": "UHB 1**02", "name": "Bahasa Asing **", "credits": 2, "prerequisite": null },
             { "code": "UQI ***02", "name": "Falsafah dan Cabaran Semasa", "credits": 2, "prerequisite": null },
             { "code": "BIT 20403", "name": "Sistem Pengoperasian", "credits": 3, "prerequisite": null },
@@ -45,7 +45,7 @@
           "subjects": [
             { "code": "BIT 21303", "name": "Interaksi Manusia-Komputer", "credits": 3, "prerequisite": null },
             { "code": "BIT 13103", "name": "Etika Profesional dan Keselamatan", "credits": 3, "prerequisite": null },
-            { "code": "BIT ****3", "name": "Elektif I", "credits": 3, "prerequisite": null, "is_elective": true }
+            { "code": "BIT ****3 (I)", "name": "Elektif I", "credits": 3, "prerequisite": null, "is_elective": true }
           ]
         },
         {
@@ -57,7 +57,7 @@
             { "code": "BIT 20803", "name": "Sistem Pangkalan Data", "credits": 3, "prerequisite": null },
             { "code": "BIT 21503", "name": "Pembangunan Web", "credits": 3, "prerequisite": null },
             { "code": "BIT 34103", "name": "Pembangunan Aplikasi Mudah Alih", "credits": 3, "prerequisite": null },
-            { "code": "BIT 3", "name": "Elektif II", "credits": 3, "prerequisite": null, "is_elective": true },
+            { "code": "BIT 3 (II)", "name": "Elektif II", "credits": 3, "prerequisite": null, "is_elective": true },
             { "code": "BIT 21603", "name": "Teknokeusahawanan", "credits": 3, "prerequisite": null }
           ]
         }
@@ -74,8 +74,8 @@
             { "code": "BIT 22203", "name": "Rangkaian Lanjutan", "credits": 3, "prerequisite": null },
             { "code": "BIT 34002", "name": "Projek Sarjana Muda I", "credits": 2, "prerequisite": null },
             { "code": "BIT 22303", "name": "Pengurusan Maklumat", "credits": 3, "prerequisite": null },
-            { "code": "BIT 3", "name": "Elektif III", "credits": 3, "prerequisite": null, "is_elective": true },
-            { "code": "BIT 3", "name": "Elektif IV", "credits": 3, "prerequisite": null, "is_elective": true },
+            { "code": "BIT 3 (III)", "name": "Elektif III", "credits": 3, "prerequisite": null, "is_elective": true },
+            { "code": "BIT 3 (IV)", "name": "Elektif IV", "credits": 3, "prerequisite": null, "is_elective": true },
             { "code": "BIT 22403", "name": "Paradigma Sistem", "credits": 3, "prerequisite": null }
           ]
         },
@@ -88,8 +88,8 @@
             { "code": "BIT 34204", "name": "Projek Sarjana Muda II", "credits": 4, "prerequisite": "BIT 34002" },
             { "code": "BIT 20503", "name": "Kreativiti Dan Inovasi", "credits": 3, "prerequisite": null },
             { "code": "BIT 35103", "name": "Pengkomputeran Awan", "credits": 3, "prerequisite": null },
-            { "code": "BIT ****3", "name": "Elektif V", "credits": 3, "prerequisite": null, "is_elective": true },
-            { "code": "BIT 3", "name": "Elektif VI", "credits": 3, "prerequisite": null, "is_elective": true }
+            { "code": "BIT ****3 (V)", "name": "Elektif V", "credits": 3, "prerequisite": null, "is_elective": true },
+            { "code": "BIT 3 (VI)", "name": "Elektif VI", "credits": 3, "prerequisite": null, "is_elective": true }
           ]
         }
       ]
