@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useProgressStore } from '@/store/progressStore';
+import { useProgressStore, LINKED_SUBJECTS } from '@/store/progressStore';
 import { calculateCGPA } from '@/lib/gradeUtils';
 import curriculumData from '@/data/curriculum.json';
 import { Badge } from '@/components/ui/badge';
@@ -43,12 +43,47 @@ export function CreditDashboard() {
 
   // Compute metrics
   const retakeCount = alerts.filter(a => a.type === 'retake').length;
-  const passedSubjectsCount = Object.keys(completedSubjects).length - retakeCount;
   
-  const totalSubjects = curriculumData.curriculum.reduce((acc, year) => 
-    acc + year.semesters.reduce((semAcc, sem) => semAcc + sem.subjects.length, 0), 0
-  );
-  const remainingSubjectsCount = Math.max(0, totalSubjects - passedSubjectsCount);
+  // Deduplicate passed subjects for count (e.g. Islam/Moral link)
+  const getDeduplicatedCount = (subjects: Record<string, any>) => {
+    const codes = Object.keys(subjects);
+    const countedLinks = new Set<string>();
+    let count = 0;
+    
+    for (const code of codes) {
+      if (LINKED_SUBJECTS[code]) {
+        const partner = LINKED_SUBJECTS[code];
+        if (countedLinks.has(partner)) continue;
+        countedLinks.add(code);
+      }
+      count++;
+    }
+    return count;
+  };
+
+  const totalPassedCount = getDeduplicatedCount(completedSubjects) - retakeCount;
+  
+  // Deduplicate curriculum slots
+  const calculateTotalSlots = () => {
+    const allCodes = curriculumData.curriculum.flatMap(y => 
+      y.semesters.flatMap(s => s.subjects.map(sub => sub.code))
+    );
+    const countedLinks = new Set<string>();
+    let total = 0;
+    
+    for (const code of allCodes) {
+      if (LINKED_SUBJECTS[code]) {
+        const partner = LINKED_SUBJECTS[code];
+        if (countedLinks.has(partner)) continue;
+        countedLinks.add(code);
+      }
+      total++;
+    }
+    return total;
+  };
+
+  const totalSubjects = calculateTotalSlots();
+  const remainingSubjectsCount = Math.max(0, totalSubjects - totalPassedCount);
 
   // SVG parameters
   const size = 200;
@@ -177,7 +212,7 @@ export function CreditDashboard() {
             <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Total Passed</span>
             <CheckCircle className="h-4 w-4 text-green-400 opacity-60 group-hover:opacity-100 transition-opacity" />
           </div>
-          <div className="text-2xl sm:text-3xl font-extrabold text-white">{passedSubjectsCount}</div>
+          <div className="text-2xl sm:text-3xl font-extrabold text-white">{totalPassedCount}</div>
           <p className="text-[10px] text-muted-foreground mt-1">subjects completed</p>
         </div>
 

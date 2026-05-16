@@ -25,7 +25,7 @@ export interface UploadHistoryItem {
 }
 
 const RETAKE_GRADES = ['D+', 'D', 'D-', 'E', 'F'];
-const LINKED_SUBJECTS: Record<string, string> = {
+export const LINKED_SUBJECTS: Record<string, string> = {
   'UQI 10102': 'UQI 10202',
   'UQI 10202': 'UQI 10102'
 };
