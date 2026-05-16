@@ -94,15 +94,32 @@ export function ExtractionDebugPanel({ debug }: { debug: ExtractionResult }) {
           {/* Summary cards */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <SummaryCard label="Tables" value={debug.tables_detected} color={debug.tables_detected >= 3 ? 'emerald' : debug.tables_detected > 0 ? 'amber' : 'red'} />
-            <SummaryCard label="Subjects" value={debug.courses.length} color={debug.courses.length > 0 ? 'emerald' : 'red'} />
+            <SummaryCard label="Subjects" value={debug.courses.length} color={debug.courses.length >= 20 ? 'emerald' : debug.courses.length > 0 ? 'amber' : 'red'} />
             <SummaryCard label="Semesters" value={debug.semesters_detected.length} color={debug.semesters_detected.length >= 4 ? 'emerald' : 'amber'} />
-            <SummaryCard label="Confidence" value={`${(debug.confidence * 100).toFixed(0)}%`} color={debug.confidence >= 0.7 ? 'emerald' : 'amber'} />
+            <SummaryCard label="Confidence" value={`${(debug.confidence * 100).toFixed(0)}%`} color={debug.confidence >= 0.7 ? 'emerald' : debug.confidence >= 0.4 ? 'amber' : 'red'} />
             <SummaryCard
               label="Credits"
               value={`${debug.calculated_total}/${debug.total_credits_found || '?'}`}
               color={debug.total_credits_found && debug.calculated_total === debug.total_credits_found ? 'emerald' : 'amber'}
             />
           </div>
+
+          {/* Confidence explanation */}
+          {(() => {
+            const confStage = debug.stages.find(s => s.stage === 'confidence_scoring');
+            const explanation = (confStage?.metadata as any)?.explanation as string[] | undefined;
+            if (explanation && explanation.length > 0) {
+              return (
+                <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">Confidence Breakdown</p>
+                  {explanation.map((line: string, i: number) => (
+                    <p key={i} className="text-xs text-white/60">{line}</p>
+                  ))}
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           {/* Tabs */}
           <div className="flex gap-1 bg-white/[0.03] rounded-lg p-1">

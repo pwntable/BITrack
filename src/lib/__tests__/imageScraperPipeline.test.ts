@@ -221,3 +221,71 @@ describe('root cause and next actions', () => {
     expect(result.next_actions.length).toBeGreaterThan(0);
   });
 });
+
+describe('merged row splitting', () => {
+  it('splits two courses merged in one line', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BIK 10103 Prinsip Kejuruteraan Perisian 3 BIK 10203 Algoritma dan Pengaturcaraan 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const codes = result.courses.map(c => c.course_code);
+    expect(codes).toContain('BIK 10103');
+    expect(codes).toContain('BIK 10203');
+  });
+});
+
+describe('6-digit course code repair', () => {
+  it('repairs BIK 101035 to BIK 10103', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BIK 101035 Prinsip Kejuruteraan 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const course = result.courses.find(c => c.course_code === 'BIK 10103');
+    expect(course).toBeDefined();
+  });
+});
+
+describe('course name cleanup', () => {
+  it('cleans joined course names', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BIK 10303 SenbinaKomputer 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const course = result.courses.find(c => c.course_code === 'BIK 10303');
+    expect(course?.course_name).toBe('Senibina Komputer');
+  });
+});
+
+describe('honest confidence scoring', () => {
+  it('gives low confidence when few subjects detected', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BIK 10103 Prinsip Kejuruteraan 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    expect(result.confidence).toBeLessThan(0.6);
+  });
+
+  it('includes confidence explanation in stages', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 8);
+    const confStage = result.stages.find(s => s.stage === 'confidence_scoring');
+    expect((confStage?.metadata as any)?.explanation).toBeDefined();
+  });
+});
+
+describe('year-from-semester mapping', () => {
+  it('assigns Year 2 to semester 3', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 8);
+    const sem3 = result.courses.find(c => c.semester === 3);
+    if (sem3) expect(sem3.year).toBe(2);
+  });
+
+  it('assigns Year 3 to semester 5', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 8);
+    const sem5 = result.courses.find(c => c.semester === 5);
+    if (sem5) expect(sem5.year).toBe(3);
+  });
+});

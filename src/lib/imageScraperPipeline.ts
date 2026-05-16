@@ -81,7 +81,9 @@ const OCR_CORRECTIONS: Record<string, string> = {
 // Common OCR word corrections for Malay course names
 const OCR_WORD_CORRECTIONS: Record<string, string> = {
   'Kejurteran': 'Kejuruteraan',
+  'Kejunteran': 'Kejuruteraan',
   'Persian': 'Perisian',
+  'Fernsian': 'Perisian',
   'Apjikasi': 'Aplikasi',
   'Mudah Ah': 'Mudah Alih',
   'SamsData': 'Sains Data',
@@ -90,6 +92,45 @@ const OCR_WORD_CORRECTIONS: Record<string, string> = {
   'Pengaturearaan': 'Pengaturcaraan',
   'Pengaturearsan': 'Pengaturcaraan',
 };
+
+// Full course name dictionary cleanup (Priority 7)
+const COURSE_NAME_CORRECTIONS: Record<string, string> = {
+  'AlgoritmadanPengaturcaraan': 'Algoritma dan Pengaturcaraan',
+  'SenbinaKomputer': 'Senibina Komputer',
+  'KejunteraanSistemPerisian': 'Kejuruteraan Sistem Perisian',
+  'KejurteranSistemPerisian': 'Kejuruteraan Sistem Perisian',
+  'Pembangunanweb': 'Pembangunan Web',
+  'StrukturData': 'Struktur Data',
+  'PangkalanData': 'Pangkalan Data',
+  'ApjikasiMudahAh': 'Aplikasi Mudah Alih',
+  'AplikasiMudahAlih': 'Aplikasi Mudah Alih',
+  'FalsafahdanCabaranSemasa': 'Falsafah dan Cabaran Semasa',
+  'PrinsipKejurteraanPerisian': 'Prinsip Kejuruteraan Perisian',
+  'RekaBentukPerisian': 'Reka Bentuk Perisian',
+  'PengurusanProjekPerisian': 'Pengurusan Projek Perisian',
+  'KeselamatanKejurteraanPerisian': 'Keselamatan Kejuruteraan Perisian',
+  'PengukuranPerisian': 'Pengukuran Perisian',
+  'EvolusidanPenyenggaraan': 'Evolusi dan Penyenggaraan',
+  'RangkaianKomputer': 'Rangkaian Komputer',
+  'SistemPengoperasian': 'Sistem Pengoperasian',
+  'KejurteraanKeperluan': 'Kejuruteraan Keperluan',
+  'KreativitiDanInovasi': 'Kreativiti dan Inovasi',
+  'PembangunanPerisian': 'Pembangunan Perisian',
+  'StrukturDiskrit': 'Struktur Diskrit',
+};
+
+function cleanCourseName(name: string): { name: string; corrected: boolean } {
+  // Check full-name dictionary first
+  const stripped = name.replace(/[~|\[\]]/g, '').trim();
+  if (COURSE_NAME_CORRECTIONS[stripped]) {
+    return { name: COURSE_NAME_CORRECTIONS[stripped], corrected: true };
+  }
+  // Try inserting spaces before capital letters in joined words
+  let cleaned = stripped.replace(/([a-z])([A-Z])/g, '$1 $2');
+  // Remove trailing tildes/pipes
+  cleaned = cleaned.replace(/~+/g, '').replace(/\|/g, '').trim();
+  return { name: cleaned, corrected: cleaned !== stripped };
+}
 
 function correctOCRText(raw: string): { text: string; corrected: boolean; log?: { before: string; after: string; reason: string } } {
   let text = raw;
@@ -133,11 +174,41 @@ function correctOCRText(raw: string): { text: string; corrected: boolean; log?: 
 
 function normalizeCourseCode(raw: string): string {
   let code = raw.trim().toUpperCase();
+  // Remove OCR artifacts
+  code = code.replace(/[~|\[\]]/g, '');
   // Insert space if missing: BIK10203 → BIK 10203
-  code = code.replace(/^([A-Z]{2,4})(\d{4,6})$/, '$1 $2');
-  // Normalize star-codes: remove extra spaces around stars
+  code = code.replace(/^([A-Z]{2,4})(\d{4,7})$/, '$1 $2');
+  // Fix 6-digit codes: BIK 101035 → BIK 10103 (remove trailing digit)
+  const sixDigitMatch = code.match(/^([A-Z]{2,4})\s(\d{6})$/);
+  if (sixDigitMatch) {
+    code = sixDigitMatch[1] + ' ' + sixDigitMatch[2].slice(0, 5);
+  }
   code = code.replace(/\s+/g, ' ');
   return code;
+}
+
+// ─── Merged Row Splitter (Priority 4) ─────────────────────────────────────────
+
+const COURSE_CODE_GLOBAL_RE = /(?:^|\s|[|~])([A-Z]{2,4}\s?\d{5})/g;
+
+function splitMergedRows(line: string): string[] {
+  const matches: { index: number; code: string }[] = [];
+  let m;
+  const re = new RegExp(COURSE_CODE_GLOBAL_RE.source, 'g');
+  while ((m = re.exec(line)) !== null) {
+    matches.push({ index: m.index, code: m[1] });
+  }
+  if (matches.length <= 1) return [line];
+  const chunks: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index;
+    const end = matches[i + 1]?.index ?? line.length;
+    let chunk = line.slice(start, end).trim();
+    // Clean separators between chunks
+    chunk = chunk.replace(/[|~]+\s*$/, '').trim();
+    if (chunk.length > 5) chunks.push(chunk);
+  }
+  return chunks;
 }
 
 // ─── Flexible Course Code Regex ───────────────────────────────────────────────
@@ -192,19 +263,21 @@ function parseCourseLine(line: string): { course: ParsedCourseRow | null; reject
   const m = COURSE_LINE_RE.exec(corrected);
   if (m) {
     const code = normalizeCourseCode(m[1]);
-    const name = m[2].trim().replace(/\*+$/, '').trim();
+    const rawName = m[2].trim().replace(/\*+$/, '').trim();
+    const { name, corrected: nameCorrected } = cleanCourseName(rawName);
     const credit = parseInt(m[3]);
     const tag = m[4] || undefined;
     const isElective = /elektif/i.test(name) || /\*{2,}/.test(code);
+    const anyCorrected = wasCorrected || nameCorrected;
 
     return {
       course: {
-        semester: 0, year: 0, // assigned later
+        semester: 0, year: 0,
         course_code: code, course_name: name,
         credit: isNaN(credit) ? 3 : credit,
         is_elective: isElective, tag,
-        confidence: wasCorrected ? 0.82 : 0.95,
-        auto_corrected: wasCorrected,
+        confidence: anyCorrected ? 0.80 : 0.95,
+        auto_corrected: anyCorrected,
         correction_log: correctionLog,
       },
     };
@@ -276,12 +349,22 @@ function assignSemesters(
     const perSem = Math.ceil(courses.length / 7);
     courses.forEach((c, i) => {
       c.semester = Math.floor(i / perSem) + 1;
-      c.year = Math.ceil(c.semester / 2);
+      c.year = yearFromSem(c.semester);
     });
   }
 
+  // Fix year mapping for all courses
+  courses.forEach(c => { c.year = yearFromSem(c.semester); });
+
   const semesters = [...new Set(courses.map(c => c.semester))].sort();
   return { courses, semesters };
+}
+
+function yearFromSem(sem: number): number {
+  if (sem <= 2) return 1;
+  if (sem <= 4) return 2;
+  if (sem <= 6) return 3;
+  return 4;
 }
 
 // ─── Validation Engine ────────────────────────────────────────────────────────
@@ -327,31 +410,71 @@ function validateExtraction(
   return { stage: 'validation', status: 'passed', message: 'All validations passed.' };
 }
 
-// ─── Confidence Scoring ───────────────────────────────────────────────────────
+// ─── Honest Confidence Scoring (Priority 10) ─────────────────────────────────
 
 function scoreExtraction(
   courses: ParsedCourseRow[],
   validationLog: StageLog,
   totalCreditsMatch: boolean,
   semestersDetected: number,
-): number {
-  if (courses.length === 0) return 0;
+  rejectedCount: number,
+): { score: number; explanation: string[] } {
+  if (courses.length === 0) return { score: 0, explanation: ['No subjects detected'] };
 
-  let score = courses.reduce((a, c) => a + c.confidence, 0) / courses.length;
-  if (!totalCreditsMatch) score -= 0.15;
-  if (semestersDetected < 5) score -= 0.10;
-  if (validationLog.status === 'failed') score -= 0.30;
-  else if (validationLog.status === 'warning') score -= 0.10;
+  let score = 100;
+  const explanation: string[] = [];
 
-  return Math.max(Math.min(score, 1.0), 0);
+  // Semester completeness
+  if (semestersDetected < 7) {
+    const penalty = Math.min(25, (7 - semestersDetected) * 5);
+    score -= penalty;
+    explanation.push(`Only ${semestersDetected}/7 semesters: -${penalty}`);
+  }
+
+  // Subject count
+  if (courses.length < 20) {
+    const penalty = Math.min(25, Math.round((20 - courses.length) * 1.5));
+    score -= penalty;
+    explanation.push(`Only ${courses.length} subjects (expected ~35): -${penalty}`);
+  }
+
+  // Rejected rows ratio
+  if (rejectedCount > courses.length) {
+    score -= 15;
+    explanation.push(`${rejectedCount} rejected rows > ${courses.length} parsed: -15`);
+  } else if (rejectedCount > 10) {
+    score -= 10;
+    explanation.push(`${rejectedCount} rejected rows: -10`);
+  }
+
+  // Credit total
+  if (!totalCreditsMatch) {
+    score -= 15;
+    explanation.push('Credit total mismatch: -15');
+  }
+
+  // Validation errors
+  if (validationLog.status === 'failed') {
+    score -= 10;
+    explanation.push('Validation errors: -10');
+  }
+
+  // Invalid course codes
+  const invalidCodes = courses.filter(c => /\d{6,}/.test(c.course_code.replace(/\s/g, '')));
+  if (invalidCodes.length > 0) {
+    score -= 10;
+    explanation.push(`${invalidCodes.length} invalid course codes: -10`);
+  }
+
+  return { score: Math.max(0, Math.min(100, score)) / 100, explanation };
 }
 
 function determineStatus(confidence: number, courses: number, validationLog: StageLog): ExtractionStatus {
   if (courses === 0) return 'FAILED';
-  if (validationLog.status === 'failed') return 'NEEDS_REVIEW';
-  if (confidence >= 0.85) return 'SUCCESS';
-  if (confidence >= 0.65) return 'PARTIAL_SUCCESS';
-  return 'NEEDS_REVIEW';
+  if (confidence >= 0.85 && validationLog.status !== 'failed') return 'SUCCESS';
+  if (confidence >= 0.65 && courses >= 25) return 'PARTIAL_SUCCESS';
+  if (confidence >= 0.35) return 'NEEDS_REVIEW';
+  return 'FAILED';
 }
 
 // ─── Metadata Detection ──────────────────────────────────────────────────────
@@ -374,6 +497,52 @@ function extractMetadata(lines: string[]): { code: string; name: string; faculty
   }
 
   return { code, name, faculty, session, totalCredits };
+}
+
+// ─── Recovery Parser (Priority 8) ────────────────────────────────────────────
+
+const RECOVERY_CODE_RE = /([A-Z]{2,4})\s?(\d{5,6})/;
+const RECOVERY_LINE_RE = /([A-Z]{2,4}\s?\d{5,6})\s*[|~]*\s*(.+?)\s*[|~]*\s*(\d{1,2})\s*[|~]*/;
+
+function recoveryParser(rawText: string): ParsedCourseRow[] {
+  const results: ParsedCourseRow[] = [];
+  // Clean OCR artifacts
+  let text = rawText.replace(/\[/g, '').replace(/\]/g, '').replace(/~+/g, ' ').replace(/\|/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Apply OCR corrections
+  const { text: corrected } = correctOCRText(text);
+
+  // Split if multiple course codes
+  const splitChunks = splitMergedRows(corrected);
+
+  for (const chunk of splitChunks) {
+    const m = chunk.match(RECOVERY_LINE_RE);
+    if (!m) continue;
+
+    const rawCode = m[1];
+    const rawName = m[2].trim();
+    const credit = parseInt(m[3]);
+
+    if (isNaN(credit) || credit < 1 || credit > 12) continue;
+
+    const code = normalizeCourseCode(rawCode);
+    const { name } = cleanCourseName(rawName);
+
+    // Validate: code must be 2-4 letters + space + 5 digits
+    if (!/^[A-Z]{2,4}\s\d{5}$/.test(code) && !/\*/.test(code)) continue;
+
+    results.push({
+      semester: 0, year: 0,
+      course_code: code,
+      course_name: name,
+      credit,
+      is_elective: /elektif/i.test(name) || /\*{2,}/.test(code),
+      confidence: 0.72,
+      auto_corrected: true,
+      correction_log: { before: rawText, after: `${code} ${name} ${credit}`, reason: 'recovery_parser' },
+    });
+  }
+  return results;
 }
 
 // ─── Main Pipeline ────────────────────────────────────────────────────────────
@@ -445,29 +614,52 @@ export function runImageExtractionPipeline(
     metadata: meta,
   });
 
-  // Stage 4: Course row parsing
+  // Stage 4: Course row parsing (with merged row splitting)
   const courses: ParsedCourseRow[] = [];
   const ocrSample: string[] = [];
+  let mergedRowsSplit = 0;
 
   for (const line of lines) {
-    if (ocrSample.length < 10) ocrSample.push(line);
-    const { course, rejected } = parseCourseLine(line);
-    if (course) courses.push(course);
-    if (rejected) rejectedRows.push(rejected);
+    if (ocrSample.length < 15) ocrSample.push(line);
+
+    // Split merged rows first (Priority 4)
+    const splitLines = splitMergedRows(line);
+    if (splitLines.length > 1) mergedRowsSplit++;
+
+    for (const chunk of splitLines) {
+      const { course, rejected } = parseCourseLine(chunk);
+      if (course) courses.push(course);
+      if (rejected) rejectedRows.push(rejected);
+    }
+  }
+
+  // Stage 4b: Recovery parser (Priority 8)
+  const recoverableRows = rejectedRows.filter(r =>
+    r.severity === 'warning' && r.reason === 'partial_course_match_failed'
+  );
+  let recoveredCount = 0;
+  for (const row of recoverableRows) {
+    const recovered = recoveryParser(row.raw_text);
+    if (recovered.length > 0) {
+      courses.push(...recovered);
+      recoveredCount += recovered.length;
+      row.severity = 'info';
+      row.reason = 'recovered_by_recovery_parser';
+      row.suggestion = `Recovered ${recovered.length} course(s)`;
+    }
   }
 
   const criticalRejections = rejectedRows.filter(r => r.severity === 'critical' || r.severity === 'warning');
   stages.push({
     stage: 'course_row_parser',
-    status: courses.length > 0 ? 'passed' : 'failed',
+    status: courses.length > 0 ? (courses.length >= 20 ? 'passed' : 'warning') : 'failed',
     message: courses.length > 0
-      ? `${courses.length} course rows parsed. ${criticalRejections.length} rows need attention.`
+      ? `${courses.length} rows parsed (${recoveredCount} recovered, ${mergedRowsSplit} merged rows split). ${criticalRejections.length} need attention.`
       : `No course rows detected. ${rejectedRows.length} rows were rejected.`,
-    metadata: { parsed: courses.length, rejected: rejectedRows.length, critical: criticalRejections.length },
+    metadata: { parsed: courses.length, rejected: rejectedRows.length, recovered: recoveredCount, mergedRowsSplit, critical: criticalRejections.length },
   });
 
   if (courses.length === 0) {
-    // Determine root cause
     let rootCause = 'unknown';
     const nextActions: string[] = [];
     if (tablesDetected === 0) {
@@ -505,16 +697,28 @@ export function runImageExtractionPipeline(
   const validationLog = validateExtraction(mainCourses, meta.totalCredits);
   stages.push(validationLog);
 
-  // Stage 7: Confidence
+  // Stage 7: Honest Confidence
   const totalMatch = meta.totalCredits ? calcTotal === meta.totalCredits : true;
-  const confidence = scoreExtraction(mainCourses, validationLog, totalMatch, semesters.length);
+  const critRejectCount = rejectedRows.filter(r => r.severity !== 'info').length;
+  const { score: confidence, explanation: confExplanation } = scoreExtraction(
+    mainCourses, validationLog, totalMatch, semesters.length, critRejectCount,
+  );
   const status = determineStatus(confidence, mainCourses.length, validationLog);
+
+  // Determine next actions based on status
+  const nextActions: string[] = [];
+  if (status !== 'SUCCESS') {
+    if (semesters.length < 7) nextActions.push('Review semester assignment — some tables may not be classified.');
+    if (critRejectCount > 5) nextActions.push(`${critRejectCount} rows rejected — review and edit manually.`);
+    if (!totalMatch && meta.totalCredits) nextActions.push(`Credit total ${calcTotal}/${meta.totalCredits} — some courses may be missing.`);
+    if (recoveredCount > 0) nextActions.push(`${recoveredCount} rows were auto-recovered — verify accuracy.`);
+  }
 
   stages.push({
     stage: 'confidence_scoring',
-    status: confidence >= 0.7 ? 'passed' : 'warning',
-    message: `Overall confidence: ${(confidence * 100).toFixed(0)}%. Status: ${status}`,
-    metadata: { confidence, status },
+    status: confidence >= 0.7 ? 'passed' : confidence >= 0.4 ? 'warning' : 'failed',
+    message: `Confidence: ${(confidence * 100).toFixed(0)}%. Status: ${status}`,
+    metadata: { confidence, status, explanation: confExplanation },
   });
 
   return {
@@ -533,7 +737,7 @@ export function runImageExtractionPipeline(
     semesters_detected: semesters,
     elective_pool: electivePool,
     tables_detected: tablesDetected,
-    next_actions: [],
+    next_actions: nextActions,
   };
 }
 

@@ -1,11 +1,10 @@
 /**
  * tableDetector.ts — Browser-side table region detection using Canvas API
  *
- * Priority 1 from the updated plan:
- *   Detect table borders → crop each table → return crop regions
- *
- * Uses adaptive thresholding and line detection via pixel scanning
- * to find rectangular table regions in curriculum images.
+ * Implements:
+ *   Step 1: Raw table detection via line/projection scanning
+ *   Step 1b: Table filtering and deduplication (Priority 1)
+ *   Step 2: Table classification + semester assignment (Priority 2)
  */
 
 export interface TableRegion {
@@ -15,10 +14,17 @@ export interface TableRegion {
   width: number;
   height: number;
   classification: 'semester_table' | 'elective_table' | 'unknown';
+  assignedSemester?: number;
+  assignedYear?: number;
+  filterScore?: number;
+  filterReason?: string;
 }
 
 export interface TableDetectionResult {
   regions: TableRegion[];
+  rawRegionCount: number;
+  filteredRegionCount: number;
+  rejectedRegions: { id: string; reason: string }[];
   imageWidth: number;
   imageHeight: number;
 }
@@ -57,19 +63,18 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { width, height, data } = imageData;
 
-  // Convert to grayscale and threshold
+  // Convert to grayscale
   const gray = new Uint8Array(width * height);
   for (let i = 0; i < width * height; i++) {
     const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
     gray[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   }
 
-  // Adaptive threshold: pixel is "dark" if it's significantly darker than local average
+  // Adaptive threshold
   const binary = new Uint8Array(width * height);
   const blockSize = 15;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      // Local window average
       let sum = 0, count = 0;
       for (let dy = -blockSize; dy <= blockSize; dy++) {
         for (let dx = -blockSize; dx <= blockSize; dx++) {
@@ -85,10 +90,9 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
     }
   }
 
-  // Detect horizontal lines: rows where many consecutive pixels are dark
-  const minLineLength = Math.floor(width * 0.15); // at least 15% of image width
+  // Detect horizontal lines
+  const minLineLength = Math.floor(width * 0.15);
   const hLines: { y: number; x1: number; x2: number }[] = [];
-
   for (let y = 0; y < height; y++) {
     let run = 0, startX = 0;
     for (let x = 0; x < width; x++) {
@@ -96,19 +100,16 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
         if (run === 0) startX = x;
         run++;
       } else {
-        if (run >= minLineLength) {
-          hLines.push({ y, x1: startX, x2: x - 1 });
-        }
+        if (run >= minLineLength) hLines.push({ y, x1: startX, x2: x - 1 });
         run = 0;
       }
     }
     if (run >= minLineLength) hLines.push({ y, x1: startX, x2: width - 1 });
   }
 
-  // Detect vertical lines: columns where many consecutive pixels are dark
-  const minVLineLength = Math.floor(height * 0.02); // shorter threshold for vertical
+  // Detect vertical lines
+  const minVLineLength = Math.floor(height * 0.02);
   const vLines: { x: number; y1: number; y2: number }[] = [];
-
   for (let x = 0; x < width; x++) {
     let run = 0, startY = 0;
     for (let y = 0; y < height; y++) {
@@ -116,16 +117,14 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
         if (run === 0) startY = y;
         run++;
       } else {
-        if (run >= minVLineLength) {
-          vLines.push({ x, y1: startY, y2: y - 1 });
-        }
+        if (run >= minVLineLength) vLines.push({ x, y1: startY, y2: y - 1 });
         run = 0;
       }
     }
     if (run >= minVLineLength) vLines.push({ x, y1: startY, y2: height - 1 });
   }
 
-  // Cluster horizontal lines by Y proximity (merge lines within 5px)
+  // Cluster horizontal lines by Y proximity
   const yTol = 5;
   const hClusters: number[] = [];
   const sortedH = [...hLines].sort((a, b) => a.y - b.y);
@@ -135,12 +134,11 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
     }
   }
 
-  // Find table rectangles: pairs of horizontal lines with vertical lines between them
-  const regions: TableRegion[] = [];
+  // Find table rectangles
+  const rawRegions: TableRegion[] = [];
   const minTableHeight = Math.floor(height * 0.04);
   const maxTableHeight = Math.floor(height * 0.35);
 
-  // Group consecutive horizontal lines into potential table tops/bottoms
   for (let i = 0; i < hClusters.length; i++) {
     for (let j = i + 1; j < hClusters.length; j++) {
       const top = hClusters[i];
@@ -148,7 +146,6 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
       const h = bottom - top;
       if (h < minTableHeight || h > maxTableHeight) continue;
 
-      // Check if there are vertical lines connecting top to bottom
       const connectingVLines = vLines.filter(v =>
         v.y1 <= top + 10 && v.y2 >= bottom - 10
       );
@@ -160,17 +157,13 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
         const w = rightX - leftX;
 
         if (w >= minLineLength) {
-          // Check it doesn't overlap with existing regions
-          const overlaps = regions.some(r =>
+          const overlaps = rawRegions.some(r =>
             Math.abs(r.y - top) < minTableHeight && Math.abs(r.x - leftX) < 50
           );
           if (!overlaps) {
-            regions.push({
-              id: `table_${regions.length + 1}`,
-              x: leftX,
-              y: top,
-              width: w,
-              height: h,
+            rawRegions.push({
+              id: `table_${rawRegions.length + 1}`,
+              x: leftX, y: top, width: w, height: h,
               classification: 'unknown',
             });
           }
@@ -179,34 +172,178 @@ export async function detectTableRegions(file: File | Blob): Promise<TableDetect
     }
   }
 
-  // If line detection didn't find enough tables, use projection-based detection
-  if (regions.length < 3) {
-    const projectionRegions = detectByProjection(gray, width, height);
-    if (projectionRegions.length > regions.length) {
-      regions.length = 0;
-      regions.push(...projectionRegions);
+  // Fallback to projection if not enough tables
+  if (rawRegions.length < 3) {
+    const projRegions = detectByProjection(gray, width, height);
+    if (projRegions.length > rawRegions.length) {
+      rawRegions.length = 0;
+      rawRegions.push(...projRegions);
     }
   }
 
-  // Sort by position (top-left first, then top-right, etc.)
-  regions.sort((a, b) => {
-    const rowA = Math.floor(a.y / (height * 0.2));
-    const rowB = Math.floor(b.y / (height * 0.2));
+  const rawCount = rawRegions.length;
+
+  // ─── Step 1b: Filter and Deduplicate ──────────────────────────────────────
+  const { valid, rejected } = filterAndDeduplicate(rawRegions, width, height);
+
+  // Sort by position (top-to-bottom, left-to-right)
+  valid.sort((a, b) => {
+    const rowA = Math.floor(a.y / (height * 0.12));
+    const rowB = Math.floor(b.y / (height * 0.12));
     if (rowA !== rowB) return rowA - rowB;
     return a.x - b.x;
   });
 
-  // Classify tables based on position
-  classifyTables(regions, width, height);
+  // ─── Step 2: Classify and assign semesters ────────────────────────────────
+  classifyAndAssignSemesters(valid, width, height);
 
-  return { regions, imageWidth: width, imageHeight: height };
+  // Re-ID after filtering
+  valid.forEach((r, i) => r.id = `table_${i + 1}`);
+
+  return {
+    regions: valid,
+    rawRegionCount: rawCount,
+    filteredRegionCount: valid.length,
+    rejectedRegions: rejected,
+    imageWidth: width,
+    imageHeight: height,
+  };
 }
 
-/**
- * Fallback: detect table regions using horizontal projection profile
- */
+// ─── Table Filtering & Deduplication ────────────────────────────────────────
+
+function filterAndDeduplicate(
+  regions: TableRegion[],
+  imgWidth: number,
+  imgHeight: number,
+): { valid: TableRegion[]; rejected: { id: string; reason: string }[] } {
+  const rejected: { id: string; reason: string }[] = [];
+  const minW = 250;
+  const minH = 80;
+  const minArea = 20000;
+
+  // Pass 1: Size filter
+  let valid = regions.filter(r => {
+    const area = r.width * r.height;
+    if (r.width < minW) { rejected.push({ id: r.id, reason: 'too_narrow' }); return false; }
+    if (r.height < minH) { rejected.push({ id: r.id, reason: 'too_short' }); return false; }
+    if (area < minArea) { rejected.push({ id: r.id, reason: 'too_small' }); return false; }
+    return true;
+  });
+
+  // Pass 2: Overlap deduplication (IoU > 0.5 → keep bigger)
+  const keep = new Set(valid.map((_, i) => i));
+  for (let i = 0; i < valid.length; i++) {
+    if (!keep.has(i)) continue;
+    for (let j = i + 1; j < valid.length; j++) {
+      if (!keep.has(j)) continue;
+      const iou = computeIoU(valid[i], valid[j]);
+      if (iou > 0.5) {
+        const areaI = valid[i].width * valid[i].height;
+        const areaJ = valid[j].width * valid[j].height;
+        if (areaI >= areaJ) {
+          keep.delete(j);
+          rejected.push({ id: valid[j].id, reason: 'duplicate_nested_region' });
+        } else {
+          keep.delete(i);
+          rejected.push({ id: valid[i].id, reason: 'duplicate_nested_region' });
+          break;
+        }
+      }
+    }
+  }
+
+  // Pass 3: Containment check (if A fully contains B, drop B)
+  const afterDedup = valid.filter((_, i) => keep.has(i));
+  const finalKeep = new Set(afterDedup.map((_, i) => i));
+  for (let i = 0; i < afterDedup.length; i++) {
+    if (!finalKeep.has(i)) continue;
+    for (let j = 0; j < afterDedup.length; j++) {
+      if (i === j || !finalKeep.has(j)) continue;
+      if (isContainedIn(afterDedup[j], afterDedup[i])) {
+        finalKeep.delete(j);
+        rejected.push({ id: afterDedup[j].id, reason: 'contained_in_larger_table' });
+      }
+    }
+  }
+
+  return { valid: afterDedup.filter((_, i) => finalKeep.has(i)), rejected };
+}
+
+function computeIoU(a: TableRegion, b: TableRegion): number {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.width, b.x + b.width);
+  const y2 = Math.min(a.y + a.height, b.y + b.height);
+  if (x2 <= x1 || y2 <= y1) return 0;
+  const intersection = (x2 - x1) * (y2 - y1);
+  const union = a.width * a.height + b.width * b.height - intersection;
+  return intersection / union;
+}
+
+function isContainedIn(inner: TableRegion, outer: TableRegion): boolean {
+  return inner.x >= outer.x && inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height;
+}
+
+// ─── Table Classification + Semester Assignment ─────────────────────────────
+
+function yearFromSemester(sem: number): number {
+  if (sem <= 2) return 1;
+  if (sem <= 4) return 2;
+  if (sem <= 6) return 3;
+  return 4;
+}
+
+function classifyAndAssignSemesters(regions: TableRegion[], imgWidth: number, imgHeight: number) {
+  if (regions.length === 0) return;
+
+  const midX = imgWidth / 2;
+
+  // Group tables into rows by Y proximity
+  const rowGroups: TableRegion[][] = [];
+  let currentGroup: TableRegion[] = [regions[0]];
+
+  for (let i = 1; i < regions.length; i++) {
+    const prev = currentGroup[currentGroup.length - 1];
+    // Same visual row if Y distance is small relative to image
+    if (Math.abs(regions[i].y - prev.y) < imgHeight * 0.08) {
+      currentGroup.push(regions[i]);
+    } else {
+      rowGroups.push(currentGroup);
+      currentGroup = [regions[i]];
+    }
+  }
+  rowGroups.push(currentGroup);
+
+  // Assign semesters: left-right pairs per row
+  let semNumber = 0;
+  for (const group of rowGroups) {
+    // Sort left to right within the row
+    group.sort((a, b) => a.x - b.x);
+
+    for (const table of group) {
+      semNumber++;
+      const centerX = table.x + table.width / 2;
+
+      // Last position bottom-right is likely elective
+      if (semNumber > 7 || (table.y > imgHeight * 0.75 && centerX > midX)) {
+        table.classification = 'elective_table';
+        table.assignedSemester = undefined;
+        table.assignedYear = undefined;
+      } else {
+        table.classification = 'semester_table';
+        table.assignedSemester = semNumber;
+        table.assignedYear = yearFromSemester(semNumber);
+      }
+    }
+  }
+}
+
+// ─── Projection Fallback ────────────────────────────────────────────────────
+
 function detectByProjection(gray: Uint8Array, width: number, height: number): TableRegion[] {
-  // Horizontal projection: count dark pixels per row
   const threshold = 128;
   const rowDensity = new Float32Array(height);
   for (let y = 0; y < height; y++) {
@@ -217,7 +354,6 @@ function detectByProjection(gray: Uint8Array, width: number, height: number): Ta
     rowDensity[y] = dark / width;
   }
 
-  // Find bands of high density (table rows) separated by gaps
   const densityThreshold = 0.05;
   const minBandHeight = height * 0.04;
   const bands: { top: number; bottom: number }[] = [];
@@ -237,7 +373,6 @@ function detectByProjection(gray: Uint8Array, width: number, height: number): Ta
     bands.push({ top: bandStart, bottom: height });
   }
 
-  // Vertical projection within each band to find left/right edges
   const regions: TableRegion[] = [];
   for (const band of bands) {
     const colDensity = new Float32Array(width);
@@ -249,7 +384,6 @@ function detectByProjection(gray: Uint8Array, width: number, height: number): Ta
       colDensity[x] = dark / (band.bottom - band.top);
     }
 
-    // Find horizontal spans
     let spanStart = -1;
     const spans: { left: number; right: number }[] = [];
     for (let x = 0; x < width; x++) {
@@ -269,8 +403,7 @@ function detectByProjection(gray: Uint8Array, width: number, height: number): Ta
     for (const span of spans) {
       regions.push({
         id: `table_${regions.length + 1}`,
-        x: span.left,
-        y: band.top,
+        x: span.left, y: band.top,
         width: span.right - span.left,
         height: band.bottom - band.top,
         classification: 'unknown',
@@ -281,32 +414,8 @@ function detectByProjection(gray: Uint8Array, width: number, height: number): Ta
   return regions;
 }
 
-/**
- * Classify table regions based on their position in the image layout.
- * UTHM curriculum images follow a consistent 2-column layout.
- */
-function classifyTables(regions: TableRegion[], imgWidth: number, imgHeight: number) {
-  // Layout: left=odd semesters, right=even semesters
-  const midX = imgWidth / 2;
-  let semCounter = 0;
+// ─── Crop ───────────────────────────────────────────────────────────────────
 
-  for (const r of regions) {
-    const centerX = r.x + r.width / 2;
-    const isLeft = centerX < midX;
-
-    // Small tables at the bottom are likely elective or latihan industri
-    if (r.y > imgHeight * 0.75 && r.height < imgHeight * 0.1) {
-      r.classification = r.width > imgWidth * 0.5 ? 'elective_table' : 'semester_table';
-    } else {
-      r.classification = 'semester_table';
-    }
-  }
-}
-
-/**
- * Crop a region from the original image, with padding and upscaling.
- * Returns a Blob suitable for OCR.
- */
 export async function cropTableRegion(
   file: File | Blob,
   region: TableRegion,
@@ -317,7 +426,6 @@ export async function cropTableRegion(
   const img = await loadImage(url);
   URL.revokeObjectURL(url);
 
-  // Add padding
   const x = Math.max(0, region.x - padding);
   const y = Math.max(0, region.y - padding);
   const w = Math.min(img.width - x, region.width + padding * 2);
@@ -327,33 +435,25 @@ export async function cropTableRegion(
   canvas.width = w * scaleFactor;
   canvas.height = h * scaleFactor;
   const ctx = canvas.getContext('2d')!;
-
-  // Enable image smoothing for upscaling
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-
-  // Draw the cropped, upscaled region
   ctx.drawImage(img, x, y, w, h, 0, 0, canvas.width, canvas.height);
 
-  // Enhance: increase contrast
+  // Auto-contrast
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { data: pixels } = imageData;
-
-  // Compute histogram for auto-contrast
   let min = 255, max = 0;
   for (let i = 0; i < pixels.length; i += 4) {
     const lum = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
     if (lum < min) min = lum;
     if (lum > max) max = lum;
   }
-
   const range = max - min || 1;
   for (let i = 0; i < pixels.length; i += 4) {
     pixels[i] = Math.min(255, Math.max(0, ((pixels[i] - min) / range) * 255));
     pixels[i + 1] = Math.min(255, Math.max(0, ((pixels[i + 1] - min) / range) * 255));
     pixels[i + 2] = Math.min(255, Math.max(0, ((pixels[i + 2] - min) / range) * 255));
   }
-
   ctx.putImageData(imageData, 0, 0);
 
   return new Promise((resolve, reject) => {

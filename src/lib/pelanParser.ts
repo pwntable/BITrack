@@ -666,7 +666,7 @@ async function extractLinesViaOCRWithRaw(
     const detection = await detectTableRegions(imageBlob);
     onProgress?.(15);
 
-    console.log(`[pelanParser] Table detection: found ${detection.regions.length} regions`);
+    console.log(`[pelanParser] Table detection: ${detection.rawRegionCount} raw → ${detection.filteredRegionCount} filtered (${detection.rejectedRegions.length} rejected)`);
 
     // If we found enough tables, OCR each one separately
     if (detection.regions.length >= 3) {
@@ -683,11 +683,6 @@ async function extractLinesViaOCRWithRaw(
       let rawText = '';
       const allLines: PdfLine[] = [];
 
-      // Assign semester numbers based on table position (layout fallback)
-      const midX = detection.imageWidth / 2;
-      let semNumber = 0;
-      let currentYear = 1;
-
       for (let i = 0; i < detection.regions.length; i++) {
         const region = detection.regions[i];
         const pct = Math.round(20 + (i / detection.regions.length) * 70);
@@ -698,24 +693,12 @@ async function extractLinesViaOCRWithRaw(
           const cropBlob = await cropTableRegion(imageBlob, region, 3, 10);
           const { data: { text } } = await worker.recognize(cropBlob);
 
-          // Determine semester from layout position
-          const centerX = region.x + region.width / 2;
-          const isLeft = centerX < midX;
-
-          // Each row of tables = left then right
-          // Semesters go: 1(left), 2(right), 3(left), 4(right), etc.
-          if (i === 0 || (i > 0 && region.y - detection.regions[i - 1].y > detection.imageHeight * 0.1)) {
-            // New row of tables
-            if (isLeft) {
-              semNumber++;
-              currentYear = Math.ceil(semNumber / 2);
-            }
-          } else if (!isLeft && i > 0) {
-            semNumber++;
-          }
+          // Use semester/year from table classifier
+          const sem = region.assignedSemester ?? (i + 1);
+          const year = region.assignedYear ?? Math.ceil(sem / 2);
 
           // Prefix with layout markers
-          const tableHeader = `\nTAHUN ${currentYear}\nSem ${semNumber}\n`;
+          const tableHeader = `\nTAHUN ${year}\nSem ${sem}\n`;
           rawText += tableHeader + text + '\n';
 
           // Convert to PdfLine[]
@@ -727,12 +710,14 @@ async function extractLinesViaOCRWithRaw(
 
           // Add semester context lines
           allLines.push(
-            { text: `TAHUN ${currentYear}`, x: region.x, y: region.y - 2 },
-            { text: `${semNumber}`, x: region.x, y: region.y - 1 },
+            { text: `TAHUN ${year}`, x: region.x, y: region.y - 2 },
+            { text: `${sem}`, x: region.x, y: region.y - 1 },
             ...tableLines,
           );
 
-          console.log(`[pelanParser] Table ${i + 1} (sem ${semNumber}): ${tableLines.length} lines from OCR`);
+          const label = region.classification === 'elective_table' ? 'elective' : `sem ${sem}`;
+          console.log(`[pelanParser] Table ${i + 1} (${label}): ${tableLines.length} lines from OCR`);
+
 
         } catch (cropErr) {
           console.warn(`[pelanParser] Failed to crop/OCR table ${i + 1}:`, cropErr);
