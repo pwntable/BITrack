@@ -263,8 +263,8 @@ export function parseTableLines(lines: PdfLine[]): ParsedTable {
 function getPdfWorkerSrc(): string {
   if (typeof window === 'undefined') return '';
   const { hostname } = window.location;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return '/pdf.worker.min.js';
-  return '/BITrack/pdf.worker.min.js';
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return '/pdf.worker.min.mjs';
+  return '/BITrack/pdf.worker.min.mjs';
 }
 
 // ─── BUG-1 + BUG-3 FIX: coordinate-aware pdfjs extraction ───────────────────
