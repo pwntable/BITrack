@@ -267,48 +267,305 @@ function getPdfWorkerSrc(): string {
   return '/BITrack/pdf.worker.min.mjs';
 }
 
-// ─── BUG-1 + BUG-3 FIX: coordinate-aware pdfjs extraction ───────────────────
+// ─── Columnar PDF extraction: match codes, names, credits by X-position ──────
 
-async function extractLinesFromPDF(file: File): Promise<PdfLine[]> {
+const COURSE_CODE_RE = /^[A-Z]{2,4}[\s\*]?[\d\*]{2,6}$|^[A-Z]{2,4}\d{5,7}$/;
+const COURSE_CODE_WITH_NAME_RE = /^([A-Z]{2,4}[\s\*]?[\d\*]{2,6}|[A-Z]{2,4}\d{5,7})\s+(.+)/;
+
+interface RawItem { str: string; x: number; y: number; }
+
+function extractColumnarSubjects(
+  items: RawItem[],
+  metaLines: string[],
+): { subjects: PdfLine[]; meta: string[] } {
+  // Find rows that contain course codes (the "Kod Kursus" rows)
+  // and rows with course names, credits, semesters, years
+
+  // Separate items by semantic type based on their content
+  const codeItems: RawItem[] = [];
+  const nameItems: RawItem[] = [];
+  const creditItems: RawItem[] = [];
+  const semItems: { sem: number; x: number; y: number }[] = [];
+  const yearItems: { year: number; x: number; y: number }[] = [];
+  const electiveNames: RawItem[] = [];
+
+  // Group items by Y with tolerance
+  const yTol = 5;
+  const rows: { y: number; cells: RawItem[] }[] = [];
+  const sortedByY = [...items].sort((a, b) => a.y - b.y);
+  let curRow: { y: number; cells: RawItem[] } | null = null;
+  for (const it of sortedByY) {
+    if (!curRow || Math.abs(it.y - curRow.y) > yTol) {
+      curRow = { y: it.y, cells: [] };
+      rows.push(curRow);
+    }
+    curRow.cells.push(it);
+  }
+
+  // Identify which Y-rows contain codes, names, credits
+  const codeRowYs: number[] = [];
+  const nameRowYs: number[] = [];
+  const creditRowYs: number[] = [];
+
+  for (const row of rows) {
+    const texts = row.cells.map(c => c.str.trim()).filter(Boolean);
+    const codeCount = texts.filter(t => COURSE_CODE_RE.test(t) || COURSE_CODE_WITH_NAME_RE.test(t)).length;
+    const numCount = texts.filter(t => /^\d{1,2}$/.test(t) && parseInt(t) <= 20).length;
+    const nameCount = texts.filter(t => t.length > 10 && !/^\d+$/.test(t) && !COURSE_CODE_RE.test(t)).length;
+
+    if (codeCount >= 3) {
+      // Skip prerequisite rows (e.g. "BIT10303 (mesti lulus sekurang-kurangnya Gred D)")
+      const hasPrereqText = texts.some(t => /mesti lulus|Gred\s*[A-F]/i.test(t));
+      if (hasPrereqText) continue;
+
+      codeRowYs.push(row.y);
+      for (const c of row.cells) {
+        const t = c.str.trim();
+        if (COURSE_CODE_RE.test(t)) codeItems.push(c);
+        else if (COURSE_CODE_WITH_NAME_RE.test(t)) codeItems.push(c); // "UHB 13102 English..."
+      }
+    } else if (numCount >= 5 && codeCount === 0) {
+      creditRowYs.push(row.y);
+      for (const c of row.cells) {
+        if (/^\d{1,2}$/.test(c.str.trim())) creditItems.push(c);
+      }
+    } else if (nameCount >= 3) {
+      nameRowYs.push(row.y);
+      for (const c of row.cells) {
+        const t = c.str.trim();
+        if (t.length > 3 && !/^Kod|^Nama|^Kredit|^Sem$|^Jumlah/i.test(t)) nameItems.push(c);
+      }
+    }
+
+    // Detect year headers
+    const yearMatch = texts.join(' ').match(/TAHUN\s*(\d)/i);
+    if (yearMatch) {
+      yearItems.push({ year: parseInt(yearMatch[1]), x: row.cells[0].x, y: row.y });
+    }
+
+    // Detect semester numbers (standalone digits in sem-labeled rows)
+    if (texts.some(t => /^Sem$/i.test(t))) {
+      for (const c of row.cells) {
+        const n = parseInt(c.str.trim());
+        if (!isNaN(n) && n >= 1 && n <= 10) semItems.push({ sem: n, x: c.x, y: c.y });
+      }
+    }
+
+    // Collect metadata lines
+    for (const c of row.cells) {
+      const t = c.str.trim();
+      if (/PROGRAM|FAKULTI|PELAN|MULAI|AKADEMIK/i.test(t)) metaLines.push(t);
+      if (/Jumlah Keseluruhan/i.test(t)) metaLines.push(t);
+    }
+  }
+
+  if (codeItems.length === 0) return { subjects: [], meta: metaLines };
+
+  // Match each code to its name and credit by X proximity
+  const xTol = 3;
+  const results: PdfLine[] = [];
+
+  // Find which semester each X position belongs to
+  const getSemForX = (x: number): number => {
+    let best = 1;
+    let bestDist = Infinity;
+    for (const s of semItems) {
+      const dist = Math.abs(s.x - x);
+      if (dist < bestDist) { bestDist = dist; best = s.sem; }
+    }
+    return best;
+  };
+
+  // Find which year each X position belongs to
+  const getYearForX = (x: number): number => {
+    let best = 1;
+    let bestDist = Infinity;
+    for (const yr of yearItems) {
+      if (x >= yr.x - 20) { // year header covers everything to its right
+        const dist = Math.abs(x - yr.x);
+        if (dist < bestDist) { bestDist = dist; best = yr.year; }
+      }
+    }
+    // Assign by range if multiple years
+    if (yearItems.length >= 2) {
+      const sorted = [...yearItems].sort((a, b) => a.x - b.x);
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        if (x >= sorted[i].x - 20) return sorted[i].year;
+      }
+    }
+    return best;
+  };
+
+  for (const codeItem of codeItems) {
+    let code = codeItem.str.trim();
+    let name = '';
+
+    // Check if code item already contains the name (e.g. "UHB 13102 English for...")
+    const combined = COURSE_CODE_WITH_NAME_RE.exec(code);
+    if (combined && combined[2].length > 3) {
+      code = combined[1];
+      name = combined[2].replace(/\*+$/, '').trim();
+    }
+
+    // Find matching name by closest X
+    if (!name) {
+      let bestDist = Infinity;
+      for (const ni of nameItems) {
+        const dist = Math.abs(ni.x - codeItem.x);
+        if (dist < bestDist) { bestDist = dist; name = ni.str.trim(); }
+      }
+    }
+
+    // Find matching credit by closest X
+    let credit = 3;
+    let bestCreditDist = Infinity;
+    for (const ci of creditItems) {
+      const dist = Math.abs(ci.x - codeItem.x);
+      if (dist < bestCreditDist) { bestCreditDist = dist; credit = parseInt(ci.str.trim()) || 3; }
+    }
+
+    const sem = getSemForX(codeItem.x);
+    const year = getYearForX(codeItem.x);
+    const isElective = /\*{2,}/.test(code) || /elektif/i.test(name);
+
+    // Build a synthetic line that parseSubjectLine can handle
+    const syntheticLine = `${code}  ${name || 'Unknown'}  ${credit}`;
+    results.push({
+      text: `YEAR:${year} SEM:${sem} ${syntheticLine}`,
+      x: codeItem.x,
+      y: codeItem.y,
+    });
+  }
+
+  return { subjects: results, meta: metaLines };
+}
+
+// ─── Columnar-aware table parser ──────────────────────────────────────────────
+
+function parseColumnarResults(lines: PdfLine[]): ParsedTable {
+  const textLines = lines.map(l => l.text);
+  const meta = detectProgramMetadata(textLines);
+  const years: ParsedTable['years'] = [];
+  const electivePool: RawRow[] = [];
+
+  // Extract YEAR:N SEM:N prefix from synthetic lines
+  const yearSemRe = /^YEAR:(\d+)\s+SEM:(\d+)\s+(.+)$/;
+
+  // Group subjects by year/sem
+  const buckets: Record<string, RawRow[]> = {};
+  let electiveSection = false;
+
+  for (const line of lines) {
+    const m = yearSemRe.exec(line.text);
+    if (m) {
+      const yr = parseInt(m[1]);
+      const sm = parseInt(m[2]);
+      const rest = m[3];
+      const row = parseSubjectLine(rest);
+      if (row) {
+        const key = `${yr}-${sm}`;
+        if (!buckets[key]) buckets[key] = [];
+        buckets[key].push(row);
+      }
+      continue;
+    }
+
+    // Also handle regular lines (from OCR path or other)
+    const t = line.text.trim();
+    if (ELECTIVE_POOL_RE.test(t)) { electiveSection = true; continue; }
+    if (YEAR_RE.test(t)) { electiveSection = false; continue; }
+
+    const row = parseSubjectLine(t);
+    if (row) {
+      if (electiveSection) electivePool.push(row);
+      else {
+        if (!buckets['1-1']) buckets['1-1'] = [];
+        buckets['1-1'].push(row);
+      }
+    }
+
+    const credMatch = t.match(/Jumlah\s+Keseluruhan\s+Kredit\s*(\d+)/i);
+    if (credMatch) meta.totalCredits = parseInt(credMatch[1]);
+  }
+
+  // Build years/semesters from buckets
+  const allKeys = Object.keys(buckets).sort();
+  const yearMap: Record<number, { year: number; semesters: { sem: number; rows: RawRow[] }[] }> = {};
+
+  for (const key of allKeys) {
+    const [yr, sm] = key.split('-').map(Number);
+    if (!yearMap[yr]) {
+      yearMap[yr] = { year: yr, semesters: [] };
+    }
+    yearMap[yr].semesters.push({ sem: sm, rows: buckets[key] });
+  }
+
+  for (const yr of Object.keys(yearMap).map(Number).sort()) {
+    years.push(yearMap[yr]);
+  }
+
+  return { ...meta, years, electivePool };
+}
+
+// ─── Main PDF extraction ──────────────────────────────────────────────────────
+
+async function extractLinesFromPDF(file: File): Promise<{ lines: PdfLine[]; columnar: boolean }> {
   try {
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = getPdfWorkerSrc();
 
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-    const allLines: PdfLine[] = [];
     const maxPages = Math.min(pdf.numPages, 5);
+
+    // Collect all raw items across pages
+    const allRawItems: RawItem[] = [];
 
     for (let p = 1; p <= maxPages; p++) {
       const page = await pdf.getPage(p);
       const viewport = page.getViewport({ scale: 1.0 });
       const content = await page.getTextContent();
 
-      // Use viewport height to flip Y (PDF Y=0 is bottom, we want top-down)
-      const items = content.items.map((item: any) => ({
-        ...item,
-        transform: [
-          item.transform[0], item.transform[1],
-          item.transform[2], item.transform[3],
-          item.transform[4],
-          viewport.height - item.transform[5], // flip Y
-        ],
-      }));
-
-      const pageLines = extractLinesFromItems(items);
-
-      // BUG-3 FIX: detect & split columns, then concatenate columns top-to-bottom
-      const cols = detectColumns(pageLines);
-      for (const col of cols) {
-        allLines.push(...col);
+      for (const item of content.items) {
+        const it = item as any;
+        if (!it.str?.trim()) continue;
+        allRawItems.push({
+          str: it.str,
+          x: Math.round(it.transform[4]),
+          y: Math.round(viewport.height - it.transform[5]),
+        });
       }
     }
 
-    return allLines;
+    if (allRawItems.length === 0) return { lines: [], columnar: false };
+
+    // Try columnar extraction first (handles UTHM landscape table PDFs)
+    const metaLines: string[] = [];
+    const { subjects } = extractColumnarSubjects(allRawItems, metaLines);
+
+    if (subjects.length >= 5) {
+      // Add metadata lines at the top
+      const fullLines: PdfLine[] = [
+        ...metaLines.map((t, i) => ({ text: t, x: 0, y: -1000 + i })),
+        ...subjects,
+      ];
+      return { lines: fullLines, columnar: true };
+    }
+
+    // Fallback: standard horizontal line reconstruction
+    const items = allRawItems.map(it => ({
+      str: it.str,
+      transform: [1, 0, 0, 1, it.x, -it.y], // restore original transform shape
+    }));
+    const pageLines = extractLinesFromItems(items);
+    const cols = detectColumns(pageLines);
+    const allLines: PdfLine[] = [];
+    for (const col of cols) allLines.push(...col);
+
+    return { lines: allLines, columnar: false };
   } catch (err) {
     console.error('[pelanParser] pdfjs extraction failed:', err);
-    return [];
+    return { lines: [], columnar: false };
   }
 }
 
@@ -429,6 +686,7 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
 
   const isImage = file.type.startsWith('image/');
   let bestLines: PdfLine[] = [];
+  let isColumnar = false;
 
   if (isImage) {
     onProgress({ step: 'running-ocr', message: 'Running OCR on image…', progress: 20 });
@@ -436,35 +694,46 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
       onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 20 + Math.round(pct * 0.5) })
     );
   } else {
-    onProgress({ step: 'extracting-text', message: 'Extracting text (Path A)…', progress: 15 });
-    const pathALines = await extractLinesFromPDF(file);
+    onProgress({ step: 'extracting-text', message: 'Extracting text…', progress: 15 });
+    const pdfResult = await extractLinesFromPDF(file);
+    bestLines = pdfResult.lines;
+    isColumnar = pdfResult.columnar;
 
-    // Count useful subject rows in Path A
-    const aCount = pathALines.filter(l => parseSubjectLine(l.text) !== null).length;
+    // Check if we got enough subjects from text extraction
+    const yearSemRe = /^YEAR:\d+\s+SEM:\d+\s+/;
+    const subjectCount = bestLines.filter(l =>
+      yearSemRe.test(l.text) || parseSubjectLine(l.text) !== null
+    ).length;
 
-    if (aCount < 3) {
-      // Likely scanned PDF — fall back to OCR
+    if (subjectCount < 3) {
+      // Fall back to OCR for scanned PDFs
       onProgress({ step: 'running-ocr', message: 'Scanned PDF detected — running OCR…', progress: 30 });
-      const pathBLines = await extractLinesViaOCR(file, pct =>
+      const ocrLines = await extractLinesViaOCR(file, pct =>
         onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 30 + Math.round(pct * 0.4) })
       );
-      const bCount = pathBLines.filter(l => parseSubjectLine(l.text) !== null).length;
-      bestLines = bCount >= aCount ? pathBLines : pathALines;
-    } else {
-      bestLines = pathALines;
+      const ocrCount = ocrLines.filter(l => parseSubjectLine(l.text) !== null).length;
+      if (ocrCount > subjectCount) {
+        bestLines = ocrLines;
+        isColumnar = false;
+      }
     }
 
-    onProgress({ step: 'merging', message: 'Comparing results…', progress: 72 });
-  }
-
-  const subjectCount = bestLines.filter(l => parseSubjectLine(l.text) !== null).length;
-  if (subjectCount === 0) {
-    warnings.push('Could not detect subject rows automatically. Please review and edit the extracted data manually.');
+    onProgress({ step: 'merging', message: 'Analyzing structure…', progress: 72 });
   }
 
   onProgress({ step: 'building-structure', message: 'Building curriculum structure…', progress: 82 });
-  const parsed = parseTableLines(bestLines);
+
+  // Use columnar parser if columnar extraction was used, otherwise standard parser
+  const parsed = isColumnar ? parseColumnarResults(bestLines) : parseTableLines(bestLines);
   const linked = detectLinkedSubjects(bestLines);
+
+  const totalSubjects = parsed.years.reduce(
+    (a, y) => a + y.semesters.reduce((b, s) => b + s.rows.length, 0), 0
+  );
+
+  if (totalSubjects === 0) {
+    warnings.push('Could not detect subject rows automatically. Please review and edit the extracted data manually.');
+  }
 
   if (parsed.years.length === 0) {
     warnings.push('No semester structure detected. You may need to add semesters manually.');
