@@ -50,6 +50,7 @@ export type ExtractionStatus = 'SUCCESS' | 'PARTIAL_SUCCESS' | 'NEEDS_REVIEW' | 
 
 export interface ExtractionResult {
   status: ExtractionStatus;
+  root_cause?: string;
   courses: ParsedCourseRow[];
   program_code: string;
   program_name: string;
@@ -63,25 +64,67 @@ export interface ExtractionResult {
   ocr_text_sample: string[];
   semesters_detected: number[];
   elective_pool: ParsedCourseRow[];
+  tables_detected: number;
+  next_actions: string[];
 }
 
 // ─── OCR Correction Map ───────────────────────────────────────────────────────
 
 const OCR_CORRECTIONS: Record<string, string> = {
-  'B1K': 'BIK', 'BLK': 'BIK', 'B|K': 'BIK', 'BlK': 'BIK',
+  // Course code prefix fixes
+  'B1K': 'BIK', 'BLK': 'BIK', 'B|K': 'BIK', 'BlK': 'BIK', 'BK': 'BIK',
   'U0I': 'UQI', 'UQL': 'UQI', 'U0U': 'UQU', 'UOI': 'UQI',
-  'B1T': 'BIT', 'BlT': 'BIT', 'B|T': 'BIT',
+  'B1T': 'BIT', 'BlT': 'BIT', 'B|T': 'BIT', 'BT': 'BIT',
   'UHE': 'UHB', 'UH8': 'UHB',
+};
+
+// Common OCR word corrections for Malay course names
+const OCR_WORD_CORRECTIONS: Record<string, string> = {
+  'Kejurteran': 'Kejuruteraan',
+  'Persian': 'Perisian',
+  'Apjikasi': 'Aplikasi',
+  'Mudah Ah': 'Mudah Alih',
+  'SamsData': 'Sains Data',
+  'KodKursus': 'Kod Kursus',
+  'NamaKursus': 'Nama Kursus',
+  'Pengaturearaan': 'Pengaturcaraan',
+  'Pengaturearsan': 'Pengaturcaraan',
 };
 
 function correctOCRText(raw: string): { text: string; corrected: boolean; log?: { before: string; after: string; reason: string } } {
   let text = raw;
+  let corrected = false;
+  let reason = '';
+  const before = text;
+
+  // Fix course code prefixes
   for (const [wrong, right] of Object.entries(OCR_CORRECTIONS)) {
     if (text.includes(wrong)) {
-      const before = text;
       text = text.replace(new RegExp(wrong.replace(/[|*]/g, '\\$&'), 'g'), right);
-      return { text, corrected: true, log: { before, after: text, reason: `common_ocr_confusion: ${wrong} → ${right}` } };
+      corrected = true;
+      reason = `code_prefix_correction: ${wrong} → ${right}`;
     }
+  }
+
+  // Fix common word OCR errors
+  for (const [wrong, right] of Object.entries(OCR_WORD_CORRECTIONS)) {
+    if (text.includes(wrong)) {
+      text = text.replace(new RegExp(wrong, 'g'), right);
+      corrected = true;
+      reason += (reason ? '; ' : '') + `word_correction: ${wrong} → ${right}`;
+    }
+  }
+
+  // Fix compressed code+name: "BIK10203Algoritma" → "BIK 10203 Algoritma"
+  const compressedMatch = text.match(/^([A-Z]{2,4})(\d{5})([A-Z])/i);
+  if (compressedMatch) {
+    text = text.replace(/^([A-Z]{2,4})(\d{5})([A-Z])/i, '$1 $2 $3');
+    corrected = true;
+    reason += (reason ? '; ' : '') + 'compressed_code_name_split';
+  }
+
+  if (corrected) {
+    return { text, corrected: true, log: { before, after: text, reason } };
   }
   return { text, corrected: false };
 }
@@ -338,6 +381,7 @@ function extractMetadata(lines: string[]): { code: string; name: string; faculty
 export function runImageExtractionPipeline(
   ocrText: string,
   sourceType: 'image' | 'scanned_pdf',
+  tablesDetected: number = 0,
 ): ExtractionResult {
   const stages: StageLog[] = [];
   const rejectedRows: RejectedRow[] = [];
@@ -350,17 +394,44 @@ export function runImageExtractionPipeline(
     message: `${sourceType === 'image' ? 'Image file' : 'Scanned PDF'} routed to OCR pipeline.`,
   });
 
-  // Stage 2: OCR quality check (based on text density)
+  // Stage 2: Table detection
+  stages.push({
+    stage: 'table_detection',
+    status: tablesDetected >= 3 ? 'passed' : tablesDetected > 0 ? 'warning' : 'failed',
+    message: tablesDetected >= 3
+      ? `${tablesDetected} table regions detected. Per-table OCR used.`
+      : tablesDetected > 0
+        ? `Only ${tablesDetected} tables detected. Some data may be mixed.`
+        : 'No table regions detected. Full-page OCR was used (less reliable).',
+    metadata: { tablesDetected },
+  });
+
+  // Stage 3: Domain-aware OCR quality check
   const totalChars = lines.join('').length;
+  // Count valid course code patterns in OCR text
+  const codePatternCount = lines.filter(l =>
+    COURSE_CODE_PATTERNS.some(p => p.test(l)) || /^[A-Z]{2,4}\s?\d{5}/.test(l)
+  ).length;
+  const creditPatternCount = lines.filter(l => /\b[1234]\b/.test(l) && l.length < 20).length;
+  const semKeywordCount = lines.filter(l => /TAHUN|Semester|^Sem\s/i.test(l)).length;
+  const usableTextScore = Math.min(1, (codePatternCount * 3 + creditPatternCount + semKeywordCount * 2) / 30);
+
   if (totalChars < 50) {
     stages.push({ stage: 'ocr_quality', status: 'failed', message: `OCR returned very little text (${totalChars} chars). Image may be too blurry or low-res.` });
     return emptyResult(stages, rejectedRows);
   }
+
+  const ocrStatus = codePatternCount === 0 ? 'failed' as const
+    : codePatternCount < 5 || usableTextScore < 0.4 ? 'warning' as const
+    : 'passed' as const;
+
   stages.push({
     stage: 'ocr_quality',
-    status: totalChars > 500 ? 'passed' : 'warning',
-    message: `OCR extracted ${totalChars} characters across ${lines.length} lines.`,
-    metadata: { totalChars, lineCount: lines.length },
+    status: ocrStatus,
+    message: ocrStatus === 'failed'
+      ? `OCR extracted ${totalChars} chars but found 0 valid course codes. Text is not usable for curriculum extraction.`
+      : `OCR extracted ${totalChars} chars, ${codePatternCount} course code patterns, usable score: ${(usableTextScore * 100).toFixed(0)}%.`,
+    metadata: { totalChars, lineCount: lines.length, codePatternCount, creditPatternCount, semKeywordCount, usableTextScore },
   });
 
   // Stage 3: Metadata extraction
@@ -395,7 +466,26 @@ export function runImageExtractionPipeline(
     metadata: { parsed: courses.length, rejected: rejectedRows.length, critical: criticalRejections.length },
   });
 
-  if (courses.length === 0) return emptyResult(stages, rejectedRows, ocrSample, meta);
+  if (courses.length === 0) {
+    // Determine root cause
+    let rootCause = 'unknown';
+    const nextActions: string[] = [];
+    if (tablesDetected === 0) {
+      rootCause = 'full_page_ocr_not_table_isolated';
+      nextActions.push('Enable table region detection.', 'Crop each table and OCR separately.');
+    } else if (codePatternCount === 0) {
+      rootCause = 'ocr_text_unreadable_for_courses';
+      nextActions.push('Improve image quality or resolution.', 'Try upscaling the image before upload.');
+    } else {
+      rootCause = 'course_code_regex_failed';
+      nextActions.push('Update course code regex.', 'Add course code normalization for compressed codes.');
+    }
+    const result = emptyResult(stages, rejectedRows, ocrSample, meta);
+    result.root_cause = rootCause;
+    result.next_actions = nextActions;
+    result.tables_detected = tablesDetected;
+    return result;
+  }
 
   // Stage 5: Semester detection
   const { courses: withSemesters, semesters } = assignSemesters(courses, lines);
@@ -442,6 +532,8 @@ export function runImageExtractionPipeline(
     ocr_text_sample: ocrSample,
     semesters_detected: semesters,
     elective_pool: electivePool,
+    tables_detected: tablesDetected,
+    next_actions: [],
   };
 }
 
@@ -466,5 +558,7 @@ function emptyResult(
     ocr_text_sample: ocrSample,
     semesters_detected: [],
     elective_pool: [],
+    tables_detected: 0,
+    next_actions: [],
   };
 }

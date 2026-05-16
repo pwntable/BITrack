@@ -1,272 +1,255 @@
-# Updated Planning: Image Scraper Error Handling for Curriculum / Pelan Pengajian Extraction
+# Latest Updated Plan: Solving Image Scraper Failure for Curriculum / Pelan Pengajian Extraction
 
-## 1. Problem Statement
+## 1. Current Situation
 
-The current scraper fails when users upload a screenshot or an image-based PDF of a curriculum plan. The system shows general warnings such as:
+The latest debug UI shows that the image scraper has improved because it now gives an extraction debug report instead of failing silently.
 
-- `0 subjects detected`
-- `Could not detect subject rows automatically`
-- `No semester structure detected`
+Current result:
 
-However, the system does not explain the actual failure point. This makes debugging difficult because the problem could come from image quality, OCR failure, table detection failure, row grouping failure, regex parsing failure, or validation failure.
+```text
+File Classification: PASSED
+OCR Quality: PASSED
+Metadata Detection: PASSED
+Course Row Parser: FAILED
+Subjects detected: 0
+Semesters detected: 0
+Confidence: 0%
+```
 
-The updated plan focuses specifically on building an image scraper that is:
+The OCR sample shows that text is being extracted, but the text is corrupted and not table-aware.
 
-- debuggable
-- layout-aware
-- OCR-aware
-- validation-driven
-- user-friendly
-- able to process images directly without requiring users to convert images into PDF first
+Example OCR output:
+
+```text
+[Sem] KodKursus | MNamaKursus | Kredit |
+[VQ 16702710202 _lengaan sam Pongafan rar |--| So Cr -
+[6110205 gona dan pengatvearsan | 5 | So Cr -
+```
+
+Rejected rows also show corrupted partial course rows:
+
+```text
+[BK20205 [KejurteranSistem Persian | 3 |
+[BIK31103 |[Pembangunan ApjikasiMudah Ah | 3 |
+[BT34503 |SamsData 13 |
+```
+
+This means the scraper is no longer failing because the file is unreadable. It is failing because the OCR output is not structured enough for the course parser.
 
 ---
 
-## 2. Core Principle
+## 2. Main Diagnosis
 
-The image scraper should not only return extracted data.
+The issue is not only regex.
 
-It must return:
+The main issue is:
 
 ```text
-1. Extracted structured data
-2. Raw OCR data
-3. Stage-by-stage debug logs
-4. Rejected row reasons
-5. Confidence score
-6. Validation result
-7. Suggested fixes
+The current scraper appears to OCR the full image/page as one block.
+This causes text from multiple tables and columns to merge together.
+The parser receives noisy, corrupted, mixed lines instead of clean course rows.
 ```
 
-The system should be able to answer:
+Therefore, the correct solution is:
 
 ```text
-Why did scraping fail?
-Where did scraping fail?
-Which rows were rejected?
-Was OCR successful?
-Were tables detected?
-Did semester totals match?
-Did the parser fail because of regex?
-Was the image too blurry or too small?
+Do not parse full-page OCR lines directly.
+Detect tables first.
+Crop each table.
+OCR each table or each table cell separately.
+Then parse structured rows.
 ```
 
 ---
 
-## 3. Updated Image Scraper Pipeline
+## 3. Updated Goal
+
+The new goal is to transform the scraper from a plain OCR parser into a layout-aware image extraction system.
+
+The scraper should be able to:
 
 ```text
-User uploads image / screenshot / image-based PDF
-        |
-        v
+1. Detect image-based curriculum files.
+2. Identify table regions.
+3. Crop each semester table.
+4. Enhance each crop before OCR.
+5. OCR per table or per cell.
+6. Reconstruct rows and columns using coordinates.
+7. Normalize OCR mistakes.
+8. Parse course rows.
+9. Detect semesters even if OCR misses the Sem column.
+10. Validate extracted credits against document totals.
+11. Produce clear debug logs at every stage.
+```
+
+---
+
+## 4. Updated High-Level Pipeline
+
+```text
+Upload image / screenshot / image-based PDF
+        ↓
 File classification
-        |
-        v
-Image extraction / rendering
-        |
-        v
-Image quality analysis
-        |
-        v
+        ↓
+Render PDF page to image if needed
+        ↓
+Image quality check
+        ↓
 Image preprocessing
-        |
-        v
+        ↓
 Table region detection
-        |
-        v
-OCR per table region
-        |
-        v
-OCR box grouping into rows
-        |
-        v
-Column reconstruction
-        |
-        v
-Semester detection
-        |
-        v
+        ↓
+Table crop generation
+        ↓
+Per-table preprocessing
+        ↓
+OCR per table crop
+        ↓
+Optional cell-level OCR
+        ↓
+Row and column reconstruction
+        ↓
+Course-code normalization
+        ↓
 Course row parsing
-        |
-        v
+        ↓
+Semester assignment
+        ↓
 SC tag detection
-        |
-        v
-Validation
-        |
-        v
+        ↓
+Credit total validation
+        ↓
 Confidence scoring
-        |
-        v
-Debug report generation
-        |
-        v
-Review UI
+        ↓
+Debug report + review UI
 ```
 
 ---
 
-## 4. File Classification
+## 5. Key Change: OCR Quality Must Mean Usable Text, Not Just Text Count
 
-The backend must first classify the uploaded file.
+The current OCR stage passes because it detects many characters.
 
-### Supported Types
+That is not enough.
+
+Bad OCR quality logic:
 
 ```text
-jpg / jpeg / png / webp      -> image OCR pipeline
-pdf with text layer          -> PDF text/table extractor
-pdf without text layer       -> image OCR pipeline
-spreadsheet                  -> spreadsheet extractor
-docx                         -> document extractor
-unknown                      -> fallback OCR or manual review
+OCR extracted 1746 characters across 51 lines
+→ OCR passed
 ```
 
-### PDF Classification Logic
+Better OCR quality logic:
 
-A converted screenshot PDF is still an image-based PDF. Normal PDF text extraction will fail.
-
-```python
-def classify_uploaded_file(file_path):
-    ext = file_path.lower().split(".")[-1]
-
-    if ext in ["jpg", "jpeg", "png", "webp"]:
-        return "image"
-
-    if ext == "pdf":
-        text = extract_pdf_text(file_path)
-
-        if text and len(text.strip()) > 100:
-            return "text_pdf"
-
-        return "image_pdf"
-
-    if ext in ["xlsx", "xls", "csv"]:
-        return "spreadsheet"
-
-    if ext == "docx":
-        return "document"
-
-    return "unknown"
+```text
+OCR extracted 1746 characters
+Valid course-code patterns found: 0
+Valid curriculum rows found: 0
+Readable table headers: weak
+Semester structure: not detected
+→ OCR is not usable for curriculum extraction
 ```
 
-### Debug Log Example
+### Add Domain OCR Quality Score
+
+The OCR quality stage should produce:
 
 ```json
 {
-  "stage": "file_classification",
-  "status": "passed",
-  "file_type": "image_pdf",
-  "message": "No text layer detected. Routing file to image OCR pipeline."
+  "total_characters": 1746,
+  "total_lines": 51,
+  "valid_course_code_count": 0,
+  "valid_credit_pattern_count": 4,
+  "semester_keyword_count": 1,
+  "table_header_score": 0.3,
+  "usable_text_score": 0.18,
+  "status": "failed_for_curriculum_extraction"
 }
 ```
+
+### Suggested Rule
+
+```typescript
+if (validCourseCodeCount === 0) {
+  status = "failed_for_curriculum_extraction";
+}
+
+if (validCourseCodeCount < 5) {
+  status = "warning";
+}
+
+if (usableTextScore < 0.4) {
+  status = "warning";
+}
+```
+
+The UI should not display `OCR Quality: PASSED` when OCR text is unreadable for course extraction.
 
 ---
 
-## 5. Image Quality Check
+## 6. Priority 1 Fix: Stop Full-Page OCR Parsing
 
-Before OCR, the system must check whether the image is suitable for extraction.
+Full-page OCR is the main reason rows are corrupted.
 
-### Metrics to Capture
-
-```text
-image width
-image height
-estimated DPI
-blur score
-contrast score
-skew angle
-brightness
-text density
-table-line visibility
-```
-
-### Quality Rules
+Full-page OCR causes this problem:
 
 ```text
-width < 1000px              -> warning
-height < 700px              -> warning
-blur score too low          -> warning or fail
-contrast too low            -> warning
-skew angle > 3 degrees      -> deskew required
-table lines not visible     -> warning
+Semester 1 left table + Semester 2 right table + headers + notes
+all become mixed into one text stream.
 ```
 
-### Example Debug Output
+The course parser then receives lines that contain multiple unrelated rows.
+
+Bad parser input:
+
+```text
+BIK 20503 Jaminan Kualiti Perisian 3 UQI 11202 Falsafah dan Cabaran Semasa 2
+```
+
+Good parser input:
 
 ```json
 {
-  "stage": "image_quality_check",
-  "status": "warning",
-  "metrics": {
-    "width": 1024,
-    "height": 768,
-    "blur_score": 61.7,
-    "contrast_score": 0.43,
-    "skew_angle": -0.6
-  },
-  "message": "Image is readable but low resolution. OCR accuracy may be reduced."
+  "semester": 4,
+  "course_code": "BIK 20503",
+  "course_name": "Jaminan Kualiti Perisian",
+  "credit": 3
 }
 ```
 
----
+### Required Change
 
-## 6. Image Preprocessing
-
-The scraper should create processed image versions before OCR.
-
-### Preprocessing Steps
+Before OCR parsing:
 
 ```text
-1. Convert to grayscale
-2. Increase contrast
-3. Remove noise
-4. Deskew
-5. Resize or upscale image
-6. Threshold image
-7. Detect table lines
-8. Save debug images
-```
-
-### Important Debug Artifacts
-
-Save these files per extraction job:
-
-```text
-debug/original.png
-debug/grayscale.png
-debug/thresholded.png
-debug/deskewed.png
-debug/table_lines_detected.png
-debug/ocr_boxes.png
-debug/table_regions/
-```
-
-### Example Debug Log
-
-```json
-{
-  "stage": "preprocessing",
-  "status": "passed",
-  "outputs": {
-    "deskew_applied": true,
-    "deskew_angle": -0.6,
-    "upscaled": true,
-    "scale_factor": 2,
-    "debug_images_saved": true
-  }
-}
+Detect table regions
+Crop each table
+OCR each crop separately
 ```
 
 ---
 
 ## 7. Table Region Detection
 
-For curriculum plan images, the scraper must detect table regions before OCR.
+Curriculum images usually contain clear bordered tables. Use OpenCV or a layout detection model to detect them.
 
-Do not OCR the whole page as one block.
+### Table Detection Process
 
-### Why Table Detection Matters
+```text
+1. Convert image to grayscale.
+2. Apply adaptive thresholding.
+3. Detect horizontal lines.
+4. Detect vertical lines.
+5. Combine line masks.
+6. Find rectangular contours.
+7. Filter by size and aspect ratio.
+8. Sort detected regions by y-position and x-position.
+9. Classify each table as semester table, elective table, notes, or total row.
+```
 
-Curriculum images usually contain many separate tables:
+### Expected Table Regions
+
+For the BIK curriculum image, expected regions are:
 
 ```text
 Semester 1 table
@@ -277,25 +260,9 @@ Semester 5 table
 Semester 6 table
 Semester 7 table
 Elective courses table
-Notes section
-Total credit row
 ```
 
-If OCR is run on the full image, the text order can become mixed.
-
-### Detection Methods
-
-Use a combination of:
-
-```text
-OpenCV line detection
-contour detection
-layout model
-projection profile
-known table-like rectangle detection
-```
-
-### Debug Log Example
+### Debug Output
 
 ```json
 {
@@ -309,8 +276,7 @@ known table-like rectangle detection
       "y": 120,
       "width": 460,
       "height": 160,
-      "classification": "semester_table",
-      "confidence": 0.91
+      "classification": "semester_table"
     },
     {
       "region_id": "table_8",
@@ -318,171 +284,173 @@ known table-like rectangle detection
       "y": 640,
       "width": 360,
       "height": 230,
-      "classification": "elective_table",
-      "confidence": 0.88
+      "classification": "elective_table"
     }
   ]
 }
 ```
 
-### Failure Message
-
-If no tables are found:
+### Failure Output
 
 ```json
 {
   "stage": "table_detection",
   "status": "failed",
   "error_code": "NO_TABLE_REGIONS_FOUND",
-  "message": "OCR cannot continue reliably because no table regions were detected.",
-  "suggestion": "Check preprocessing output and table-line detection image."
+  "message": "No table regions detected. Full-page OCR is not reliable for this layout.",
+  "suggestion": "Inspect thresholded image and table-line detection debug image."
 }
 ```
 
 ---
 
-## 8. OCR per Table Region
+## 8. Save Table Crop Debug Images
 
-Run OCR on each cropped table region, not on the full image.
+For every extraction job, save table crop images.
 
-### Recommended OCR Engines
+Example debug files:
 
 ```text
-Primary: PaddleOCR or Google Cloud Vision
-Fallback: Tesseract
-Enterprise option: AWS Textract or Azure Document Intelligence
+debug/job_123/original.png
+debug/job_123/preprocessed.png
+debug/job_123/table_lines_detected.png
+debug/job_123/tables/table_1.png
+debug/job_123/tables/table_2.png
+debug/job_123/tables/table_3.png
+debug/job_123/ocr_boxes.png
 ```
 
-### OCR Output Format
+The frontend should allow developers to open these images.
 
-Each OCR result should preserve text, confidence, and bounding box.
+This is important because if scraping fails, you can immediately check:
 
-```json
-{
-  "region_id": "semester_1",
-  "text": "BIK 10203",
-  "confidence": 0.94,
-  "bbox": {
-    "x": 82,
-    "y": 202,
-    "width": 68,
-    "height": 14
-  }
-}
-```
-
-### Debug Log Example
-
-```json
-{
-  "stage": "ocr",
-  "status": "passed",
-  "engine": "paddleocr",
-  "regions_processed": 8,
-  "text_blocks_detected": 284,
-  "average_confidence": 0.86,
-  "low_confidence_blocks": 14
-}
-```
-
-### Failure Message
-
-```json
-{
-  "stage": "ocr",
-  "status": "failed",
-  "error_code": "OCR_NO_TEXT_FOUND",
-  "message": "OCR completed but no readable text was detected.",
-  "suggestion": "Image may be too blurry, too small, or preprocessing may have removed text."
-}
+```text
+Did the detector crop the correct table?
+Was the table crop too small?
+Did the crop include two tables accidentally?
+Was the crop missing the course code column?
 ```
 
 ---
 
-## 9. Row Reconstruction from OCR Boxes
+## 9. Per-Table Image Preprocessing
 
-OCR returns text boxes, not clean table rows.
+After cropping each table, preprocess it before OCR.
 
-The scraper must group OCR boxes into rows using y-coordinate proximity.
+The text in screenshots is often small. OCR should not run on the raw crop.
 
-### Row Grouping Logic
+### Recommended Preprocessing Per Table
 
-```python
-def group_ocr_boxes_into_rows(ocr_boxes, y_tolerance=8):
-    rows = []
-
-    for box in sorted(ocr_boxes, key=lambda b: b["y"]):
-        matched_row = None
-
-        for row in rows:
-            if abs(row["y"] - box["y"]) <= y_tolerance:
-                matched_row = row
-                break
-
-        if matched_row:
-            matched_row["items"].append(box)
-        else:
-            rows.append({
-                "y": box["y"],
-                "items": [box]
-            })
-
-    for row in rows:
-        row["items"] = sorted(row["items"], key=lambda b: b["x"])
-
-    return rows
+```text
+1. Crop table with padding.
+2. Upscale crop by 2x or 3x.
+3. Convert to grayscale.
+4. Denoise.
+5. Increase contrast.
+6. Apply adaptive threshold.
+7. Sharpen text.
+8. Optional: remove table lines only after cell boundaries are detected.
 ```
+
+### Why Upscaling Matters
+
+Current OCR output contains:
+
+```text
+KejurteranSistem Persian
+ApjikasiMudah Ah
+SamsData
+```
+
+These errors strongly suggest the OCR engine cannot clearly read small text.
+
+Upscaling each table crop should improve recognition.
 
 ### Debug Output
 
 ```json
 {
-  "stage": "row_reconstruction",
+  "stage": "per_table_preprocessing",
   "status": "passed",
-  "rows_created": 47,
-  "sample_rows": [
-    "BIK 10203 Algoritma dan Pengaturcaraan 3 SC",
-    "BIK 10303 Senibina Komputer 3 SC",
-    "Jumlah 19"
-  ]
+  "table_id": "table_1",
+  "scale_factor": 3,
+  "output": "debug/job_123/tables/table_1_preprocessed.png"
 }
 ```
 
 ---
 
-## 10. Column Reconstruction
+## 10. OCR Per Table Crop
 
-Rows must be split into logical columns.
+Run OCR separately for each table crop.
 
-Expected columns:
+Do not send the whole image as a single OCR request.
 
-```text
-Sem | Kod Kursus | Nama Kursus | Kredit | Tag
-```
-
-The parser should use x-coordinate boundaries, not only text spacing.
-
-### Column Mapping Example
-
-```text
-x = 0-50       -> semester
-x = 50-150     -> course code
-x = 150-450    -> course name
-x = 450-500    -> credit
-x = 500+       -> tag / SC
-```
-
-Because table positions can vary, column boundaries should be calculated per detected table region.
-
-### Debug Log Example
+### Per-Table OCR Output
 
 ```json
 {
-  "stage": "column_reconstruction",
-  "status": "passed",
-  "columns_detected": ["sem", "course_code", "course_name", "credit", "tag"],
-  "sample_row": {
-    "sem": "1",
+  "table_id": "table_1",
+  "ocr_text": [
+    "Sem Kod Kursus Nama Kursus Kredit",
+    "1 UHB 13102 English for General Communication 2",
+    "BIK 10103 Prinsip Kejuruteraan Perisian 3",
+    "BIK 10203 Algoritma dan Pengaturcaraan 3 SC",
+    "Jumlah 19"
+  ],
+  "valid_course_codes_found": 4,
+  "average_confidence": 0.89
+}
+```
+
+### Table-Level Debug Summary
+
+```json
+{
+  "stage": "ocr_per_table",
+  "status": "partial_success",
+  "tables_processed": 8,
+  "tables_with_valid_course_codes": 6,
+  "tables_failed": 2,
+  "average_confidence": 0.84
+}
+```
+
+This lets the developer know which table failed, instead of only seeing global `0 subjects`.
+
+---
+
+## 11. Cell-Level OCR for Highest Reliability
+
+If per-table OCR is still noisy, move to cell-level OCR.
+
+### Cell-Level Process
+
+```text
+Detect rows and columns inside the table.
+Crop each cell.
+OCR each cell separately.
+Map cells to fields.
+```
+
+Expected fields:
+
+```text
+Sem
+Kod Kursus
+Nama Kursus
+Kredit
+Tag / SC
+```
+
+### Cell-Level Output
+
+```json
+{
+  "table_id": "semester_1",
+  "row_index": 5,
+  "cells": {
+    "sem": "",
     "course_code": "BIK 10203",
     "course_name": "Algoritma dan Pengaturcaraan",
     "credit": "3",
@@ -491,69 +459,179 @@ Because table positions can vary, column boundaries should be calculated per det
 }
 ```
 
----
+### Why Cell OCR Is Better
 
-## 11. Course Code Normalization
-
-The scraper must normalize OCR mistakes before parsing.
-
-### Common OCR Mistakes
+Instead of parsing this corrupted line:
 
 ```text
-B1K       -> BIK
-BlK       -> BIK
-B|K       -> BIK
-U0I       -> UQI
-UQl       -> UQI
-O         -> 0 inside course code
-I         -> 1 inside course code
-missing space: BIK10203 -> BIK 10203
+[BK20205 [KejurteranSistem Persian | 3 | [UI 12 ...
 ```
 
-### Normalization Function
+The parser receives:
 
-```python
-def normalize_course_code(raw_code):
-    code = raw_code.upper().strip()
+```json
+{
+  "course_code": "BIK 20203",
+  "course_name": "Kejuruteraan Sistem Perisian",
+  "credit": "3"
+}
+```
 
-    replacements = {
-        "B1K": "BIK",
-        "BLK": "BIK",
-        "B|K": "BIK",
-        "U0I": "UQI",
-        "UQL": "UQI"
+This reduces row-merging and column-merging errors.
+
+---
+
+## 12. Row and Column Reconstruction
+
+If full cell detection is not available, reconstruct rows from OCR boxes using coordinates.
+
+### Row Grouping
+
+Group text boxes by y-coordinate.
+
+```typescript
+function groupBoxesIntoRows(boxes, yTolerance = 8) {
+  const rows = [];
+
+  for (const box of boxes.sort((a, b) => a.y - b.y)) {
+    let matched = null;
+
+    for (const row of rows) {
+      if (Math.abs(row.y - box.y) <= yTolerance) {
+        matched = row;
+        break;
+      }
     }
 
-    for wrong, right in replacements.items():
-        code = code.replace(wrong, right)
+    if (matched) {
+      matched.items.push(box);
+    } else {
+      rows.push({ y: box.y, items: [box] });
+    }
+  }
 
-    code = re.sub(r"([A-Z]{2,4})(\d{5})", r"\1 \2", code)
+  for (const row of rows) {
+    row.items.sort((a, b) => a.x - b.x);
+  }
 
-    return code
+  return rows;
+}
+```
+
+### Column Mapping
+
+Use table-local x-coordinate ranges.
+
+```text
+x 0% - 10%      → semester
+x 10% - 30%     → course code
+x 30% - 85%     → course name
+x 85% - 95%     → credit
+x 95%+          → tag / SC
+```
+
+Column boundaries should be detected dynamically from vertical table lines when possible.
+
+---
+
+## 13. Course Code Normalization
+
+The rejected rows show course codes are sometimes compressed or misread.
+
+Examples:
+
+```text
+BK20205
+BIK31103
+BT34503
+```
+
+Normalize before regex parsing.
+
+### Common Corrections
+
+```typescript
+const OCR_CORRECTIONS = {
+  "B1K": "BIK",
+  "BlK": "BIK",
+  "B|K": "BIK",
+  "BK": "BIK",
+  "U0I": "UQI",
+  "UQl": "UQI",
+  "U0U": "UQU",
+  "KodKursus": "Kod Kursus",
+  "NamaKursus": "Nama Kursus",
+  "Kejurteran": "Kejuruteraan",
+  "Persian": "Perisian",
+  "Apjikasi": "Aplikasi",
+  "Mudah Ah": "Mudah Alih",
+  "SamsData": "Sains Data"
+};
+```
+
+### Course Code Spacing
+
+```text
+BIK31103 → BIK 31103
+UQU40103 → UQU 40103
+BIT34503 → BIT 34503
+```
+
+### Normalization Rule
+
+```typescript
+function normalizeCourseCode(code: string): string {
+  let normalized = code.toUpperCase().trim();
+
+  normalized = normalized
+    .replace(/B1K|BLK|B\|K/g, "BIK")
+    .replace(/U0I|UQL/g, "UQI")
+    .replace(/U0U/g, "UQU");
+
+  normalized = normalized.replace(/^([A-Z]{2,4})(\d{5})$/, "$1 $2");
+
+  return normalized;
+}
 ```
 
 ### Correction Log
 
-Every correction should be logged.
+Every correction must be logged.
 
 ```json
 {
   "stage": "normalization",
   "type": "ocr_correction",
-  "before": "B1K 10203",
-  "after": "BIK 10203",
-  "reason": "common_ocr_confusion",
-  "confidence": 0.82
+  "before": "BIK31103",
+  "after": "BIK 31103",
+  "reason": "missing_space_between_prefix_and_digits"
 }
 ```
 
 ---
 
-## 12. Course Row Parser
+## 14. Course Row Parser Update
 
-The parser must support flexible course code formats.
+The parser should parse from structured cells whenever possible.
 
-### Expected Code Formats
+### Preferred Parser Input
+
+```json
+{
+  "course_code": "BIK 10203",
+  "course_name": "Algoritma dan Pengaturcaraan",
+  "credit": "3",
+  "tag": "SC"
+}
+```
+
+### Avoid This Parser Input
+
+```text
+BIK10203AlgoritmadanPengaturcaraan3SC
+```
+
+### Supported Code Formats
 
 ```text
 BIK 10103
@@ -567,761 +645,538 @@ BIT 10303
 BIT ****3
 ```
 
-### Regex Example
+### Regex
 
-```python
-COURSE_CODE_REGEX = r'''
-(
-  [A-Z]{2,4}\s?\d{5}
-  |
-  [A-Z]{2,4}\s?\d{5}/\d{5}
-  |
-  [A-Z]{2,4}\s?\d{3,5}/\d{3,5}
-  |
-  UQ\*\s?1\*\*\*1
-  |
-  BI\*\s?3\*\*03
-  |
-  BIT?\s?\*{3,4}3
-)
-'''
-```
-
-### Course Row Output
-
-```json
-{
-  "semester": 1,
-  "course_code": "BIK 10203",
-  "course_name": "Algoritma dan Pengaturcaraan",
-  "credit": 3,
-  "tag": "SC",
-  "source": {
-    "region_id": "semester_1",
-    "row_index": 6,
-    "ocr_confidence": 0.91
-  }
-}
+```typescript
+const COURSE_CODE_REGEX = new RegExp(
+  [
+    "[A-Z]{2,4}\\s?\\d{5}",
+    "[A-Z]{2,4}\\s?\\d{5}/\\d{5}",
+    "[A-Z]{2,4}\\s?\\d{3,5}/\\d{3,5}",
+    "UQ\\*\\s?1\\*\\*\\*1",
+    "BI\\*\\s?3\\*\\*03",
+    "BIT?\\s?\\*{3,4}3"
+  ].join("|")
+);
 ```
 
 ---
 
-## 13. Rejected Row Logging
+## 15. Programme Context-Aware Repair
 
-Do not silently ignore rows.
+Metadata detection already found the programme code, such as `BIK`.
 
-Every rejected row must have a reason.
+Use this information to improve parsing.
 
-### Rejection Categories
-
-```text
-expected_rejection
-unexpected_rejection
-critical_rejection
-```
-
-### Expected Rejections
+If programme code is `BIK`, then course code mistakes like this can be treated as likely OCR errors:
 
 ```text
-Jumlah
-Jumlah Keseluruhan Kredit
-TAHUN 1
-TAHUN 2
-Notes
-Update date
-table headers
-meeting references
+BK20205 → likely BIK 20205 or BIK 20203
+BIK31103 → BIK 31103
 ```
 
-### Unexpected Rejections
+But do not blindly save uncertain repairs.
 
-```text
-Rows that look like courses but fail parsing
-Rows containing BIK/UHB/UQI/UQU but no credit
-Rows containing credit but no course code
-Rows with low OCR confidence
-```
-
-### Example Rejected Row Log
+### Suggested Repair Output
 
 ```json
 {
-  "stage": "course_row_parser",
-  "status": "warning",
-  "rejected_rows": [
-    {
-      "raw_text": "BIK 10203 Algoritma dan Pengaturcaraan 3 SC",
-      "reason": "regex_pattern_failed",
-      "severity": "critical",
-      "suggestion": "Update course-code regex or inspect OCR normalization."
-    },
-    {
-      "raw_text": "Jumlah 19",
-      "reason": "summary_total_row",
-      "severity": "info",
-      "suggestion": null
-    }
-  ]
+  "raw_code": "BK20205",
+  "suggested_code": "BIK 20205",
+  "confidence": 0.62,
+  "requires_review": true,
+  "reason": "programme code context suggests BIK prefix"
 }
 ```
 
+Only auto-accept repairs when confidence is high and validation passes.
+
 ---
 
-## 14. Semester Detection
+## 16. Semester Detection Fallback
 
-Semester detection should not depend on only one method.
-
-### Detection Methods
+The current report says:
 
 ```text
-1. Read semester number from the Sem column
-2. Read nearby year labels, such as TAHUN 1 / TAHUN 2 / TAHUN 3
-3. Infer semester from table position
-4. Infer semester from known semester totals
+0 semesters detected
 ```
 
-### Fallback Layout Mapping
+This can happen if OCR misses the Sem column.
 
-If OCR misses the semester column, infer from table position.
+Do not depend only on OCR for semester detection.
 
-Example:
+### Use Multiple Methods
 
 ```text
-top-left table       -> semester 1
-top-right table      -> semester 2
-middle-left table    -> semester 3
-middle-right table   -> semester 4
-lower-left table     -> semester 5
-lower-right table    -> semester 6
-bottom-left small    -> semester 7
+1. Read semester number from Sem column.
+2. Read nearby TAHUN labels.
+3. Infer semester from table position.
+4. Infer semester from known table order.
+5. Validate using each table's Jumlah row.
 ```
 
-This mapping should be configurable, not hardcoded permanently.
+### Layout Fallback for This Curriculum Style
 
-### Debug Log Example
+```text
+top-left table       → semester 1
+top-right table      → semester 2
+second-left table    → semester 3
+second-right table   → semester 4
+third-left table     → semester 5
+third-right table    → semester 6
+bottom-left table    → semester 7
+bottom-right table   → elective courses
+```
+
+### Debug Output
 
 ```json
 {
   "stage": "semester_detection",
   "status": "partial_success",
-  "method": "layout_fallback",
+  "method": "layout_position_fallback",
   "semesters_detected": [1, 2, 3, 4, 5, 6, 7],
-  "message": "Semester column was weak, but semesters were inferred from table position."
+  "message": "Semester numbers were inferred from table positions because OCR missed the Sem column."
 }
 ```
 
 ---
 
-## 15. SC Tag Detection
+## 17. SC Tag Detection
 
-Yellow `SC` markers may be missed by OCR.
+Yellow `SC` markers may not be reliably read by OCR.
 
 Use both OCR and color detection.
 
-### Method 1: OCR-Based
+### OCR Method
 
-If OCR detects `SC`, assign it to the nearest course row.
+If OCR detects `SC`, assign it to the nearest row.
 
-### Method 2: Color-Based
+### Color Method
 
-Detect yellow regions using HSV color thresholding.
+Detect yellow highlights using HSV thresholding.
 
-```python
-def detect_yellow_regions(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    lower_yellow = (20, 80, 80)
-    upper_yellow = (40, 255, 255)
-
-    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-
-    return mask
+```typescript
+const lowerYellow = [20, 80, 80];
+const upperYellow = [40, 255, 255];
 ```
 
-### Assignment Rule
+Then attach the yellow region to the row with the closest y-coordinate.
 
-```text
-yellow box y-coordinate close to course row y-coordinate
--> assign tag = "SC"
-```
-
-### Debug Log Example
+### Debug Output
 
 ```json
 {
   "stage": "sc_detection",
   "status": "passed",
   "yellow_regions_detected": 10,
-  "sc_tags_assigned": 10
+  "sc_tags_assigned": 10,
+  "method": "ocr_and_color_detection"
 }
 ```
 
 ---
 
-## 16. Validation Engine
+## 18. Credit Validation
 
-Validation is required to detect hidden scraping errors.
+Credit validation should be the final gate.
 
-### Row-Level Validation
-
-```text
-course_code exists
-course_name exists
-credit exists
-credit is numeric
-credit is within allowed range
-semester exists
-OCR confidence above threshold
-course code format valid
-```
-
-### Document-Level Validation
+The scraper should compare:
 
 ```text
-semester totals match
-overall credit total matches
-minimum number of courses detected
-all required semesters detected
-duplicate course codes checked
-elective rows detected
-programme info detected
+document semester total
+vs
+calculated semester total
 ```
 
-### Example Expected Totals
-
-For many curriculum plans:
+and:
 
 ```text
-Semester 1 total = 19 or 20
-Semester 2 total = 19 or 20
-Semester 3 total = 19 or 20
-Semester 4 total = 19 or 20
-Semester 5 total = 16 or 20
-Semester 6 total = 16 or 20
-Semester 7 total = 12
-Overall total = 120
-```
-
-These should be read from the document when possible, not hardcoded.
-
-### Validation Output
-
-```json
-{
-  "stage": "validation",
-  "status": "failed",
-  "checks": {
-    "overall_total_found": 120,
-    "calculated_total": 96,
-    "overall_total_match": false,
-    "semesters_detected": [1, 2, 3, 4],
-    "missing_semesters": [5, 6, 7]
-  },
-  "message": "Calculated total does not match document total. Some rows were likely missed."
-}
-```
-
----
-
-## 17. Confidence Scoring
-
-Each course and the whole extraction job should have confidence scores.
-
-### Row Confidence Inputs
-
-```text
-OCR confidence
-course-code regex match
-credit detected
-row grouping quality
-semester detection method
-whether auto-correction was used
-whether row passed validation
-```
-
-### Example Formula
-
-```python
-def score_course(row):
-    score = 1.0
-
-    if row["ocr_confidence"] < 0.85:
-        score -= 0.15
-
-    if row.get("auto_corrected"):
-        score -= 0.05
-
-    if row.get("semester_detection_method") == "layout_fallback":
-        score -= 0.05
-
-    if row.get("tag") == "SC" and row.get("tag_detection_method") == "color_fallback":
-        score -= 0.03
-
-    if row.get("validation_errors"):
-        score -= 0.30
-
-    return max(score, 0.0)
-```
-
-### Job Confidence
-
-```text
-average row confidence
-number of validation errors
-number of critical rejected rows
-whether total credits match
-whether all semesters were detected
-```
-
----
-
-## 18. Status Model
-
-The scraper should return clear statuses.
-
-```text
-SUCCESS
-PARTIAL_SUCCESS
-NEEDS_REVIEW
-FAILED
-```
-
-### Status Rules
-
-```text
-SUCCESS
-- all required sections detected
-- all semester totals match
-- overall total matches
-- confidence above threshold
-
-PARTIAL_SUCCESS
-- most subjects detected
-- minor warnings exist
-- validation mostly passes
-
-NEEDS_REVIEW
-- extraction produced data
-- but confidence is low or totals mismatch
-
-FAILED
-- no OCR text
-- no tables detected
-- no valid course rows
-- severe validation failure
+document overall total
+vs
+calculated overall total
 ```
 
 ### Example
 
 ```json
 {
-  "status": "NEEDS_REVIEW",
-  "message": "OCR succeeded but course row parsing failed.",
-  "confidence": 0.42
+  "semester": 1,
+  "document_total": 19,
+  "calculated_total": 19,
+  "status": "passed"
+}
+```
+
+### Failure Example
+
+```json
+{
+  "semester": 1,
+  "document_total": 19,
+  "calculated_total": 13,
+  "status": "failed",
+  "message": "Likely missed course rows in semester 1."
+}
+```
+
+Only mark extraction as `SUCCESS` when totals match or when the user manually confirms corrected rows.
+
+---
+
+## 19. Rejected Row Logging Upgrade
+
+The current rejected row report is useful but should be expanded.
+
+For every rejected row, include:
+
+```text
+raw_text
+source table
+source row number
+OCR confidence
+reason
+suggested normalized text
+suggested fix
+severity
+```
+
+### Example
+
+```json
+{
+  "raw_text": "[BIK31103 |[Pembangunan ApjikasiMudah Ah | 3 |",
+  "source_table": "table_8",
+  "source_row": 6,
+  "ocr_confidence": 0.71,
+  "reason": "partial_course_match_failed",
+  "suggested_normalized_text": "BIK 31103 | Pembangunan Aplikasi Mudah Alih | 3",
+  "severity": "warning",
+  "requires_review": true
 }
 ```
 
 ---
 
-## 19. Debug API Response Design
+## 20. Updated Frontend Debug Report
 
-The frontend should receive structured debug information.
+The debug report should show root cause, not just stage status.
+
+### Add Root Cause Section
+
+Example:
+
+```text
+Root cause:
+OCR text is not table-isolated. Text from multiple columns was merged before parsing.
+```
+
+or:
+
+```text
+Root cause:
+Course code regex rejected all rows because OCR returned compressed codes such as BIK31103.
+```
+
+### Add Table Debug Tab
+
+Show:
+
+```text
+Detected table crops
+Per-table OCR sample
+Valid course codes per table
+Rows parsed per table
+Rows rejected per table
+```
+
+### Add OCR Quality Tab
+
+Show:
+
+```text
+Total OCR characters
+Valid course codes found
+Valid credits found
+Usable text score
+Average confidence
+Low-confidence rows
+```
+
+---
+
+## 21. Updated Backend Response Shape
+
+The API should return something like this:
 
 ```json
 {
-  "job_id": "job_123",
-  "status": "NEEDS_REVIEW",
+  "status": "FAILED",
+  "root_cause": "full_page_ocr_not_table_isolated",
   "summary": {
-    "file_type": "image_pdf",
-    "ocr_used": true,
-    "tables_detected": 8,
     "subjects_detected": 0,
-    "warnings": 2,
-    "confidence": 0.42
+    "semesters_detected": 0,
+    "confidence": 0,
+    "ocr_characters": 1746,
+    "ocr_lines": 51,
+    "valid_course_codes_found": 0,
+    "tables_detected": 0
   },
   "stage_results": [
     {
       "stage": "file_classification",
       "status": "passed",
-      "message": "Image-based PDF detected."
+      "message": "Image file routed to OCR pipeline."
     },
     {
-      "stage": "image_quality_check",
+      "stage": "ocr_quality",
       "status": "warning",
-      "message": "Image resolution is low."
+      "message": "OCR extracted text, but usable curriculum pattern score is low."
     },
     {
-      "stage": "ocr",
-      "status": "passed",
-      "message": "OCR detected 284 text blocks."
-    },
-    {
-      "stage": "row_reconstruction",
-      "status": "passed",
-      "message": "47 rows reconstructed."
+      "stage": "table_detection",
+      "status": "not_run",
+      "message": "Table detection should run before parsing course rows."
     },
     {
       "stage": "course_row_parser",
       "status": "failed",
-      "message": "0 rows matched course pattern."
+      "message": "No valid course rows detected because OCR lines were corrupted."
     }
   ],
-  "debug": {
-    "ocr_text_sample": [
-      "BIK 10203 Algoritma dan Pengaturcaraan 3 SC",
-      "BIK 10303 Senibina Komputer 3 SC",
-      "Jumlah 19"
-    ],
-    "rejected_rows": [
-      {
-        "raw_text": "BIK 10203 Algoritma dan Pengaturcaraan 3 SC",
-        "reason": "regex_pattern_failed",
-        "suggestion": "Update parser to support BIK course codes."
-      }
-    ],
-    "debug_images": {
-      "table_detection": "/debug/job_123/table_lines_detected.png",
-      "ocr_boxes": "/debug/job_123/ocr_boxes.png"
-    }
-  }
+  "next_actions": [
+    "Enable table region detection.",
+    "Crop each table and OCR separately.",
+    "Add course code normalization for BIK31103 style codes.",
+    "Add layout-based semester fallback."
+  ]
 }
 ```
 
 ---
 
-## 20. Frontend Review UI Improvements
+## 22. Updated Implementation Priority
 
-The frontend should show more than warning banners.
-
-### Add Debug Panel
-
-```text
-Extraction Summary
-- File type
-- OCR used
-- OCR engine
-- Tables detected
-- Rows reconstructed
-- Subjects detected
-- Confidence score
-- Validation status
-```
-
-### Add Stage Timeline
-
-```text
-File classification       Passed
-Image quality check       Warning
-Preprocessing             Passed
-Table detection           Passed
-OCR                       Passed
-Row reconstruction        Passed
-Course parser             Failed
-Validation                Skipped
-```
-
-### Add Rejected Rows Section
-
-Show:
-
-```text
-Raw row
-Reason rejected
-Severity
-Suggested fix
-OCR confidence
-Source table/region
-```
-
-### Add Debug Image Viewer
-
-Allow developers/admins to inspect:
-
-```text
-original image
-preprocessed image
-table detection output
-OCR bounding boxes
-cropped tables
-```
-
----
-
-## 21. Database Tables for Debuggable Scraping
-
-### extraction_jobs
-
-```sql
-CREATE TABLE extraction_jobs (
-    id BIGINT PRIMARY KEY,
-    file_name VARCHAR(255),
-    file_type VARCHAR(50),
-    status VARCHAR(50),
-    final_confidence DECIMAL(5,2),
-    created_at TIMESTAMP,
-    completed_at TIMESTAMP
-);
-```
-
-### extraction_stage_logs
-
-```sql
-CREATE TABLE extraction_stage_logs (
-    id BIGINT PRIMARY KEY,
-    job_id BIGINT,
-    stage_name VARCHAR(100),
-    status VARCHAR(50),
-    message TEXT,
-    metadata_json JSON,
-    created_at TIMESTAMP
-);
-```
-
-### ocr_blocks
-
-```sql
-CREATE TABLE ocr_blocks (
-    id BIGINT PRIMARY KEY,
-    job_id BIGINT,
-    page_number INT,
-    region_id VARCHAR(100),
-    text TEXT,
-    confidence DECIMAL(5,2),
-    bbox_json JSON
-);
-```
-
-### detected_tables
-
-```sql
-CREATE TABLE detected_tables (
-    id BIGINT PRIMARY KEY,
-    job_id BIGINT,
-    page_number INT,
-    region_id VARCHAR(100),
-    table_type VARCHAR(100),
-    bbox_json JSON,
-    confidence DECIMAL(5,2)
-);
-```
-
-### parsed_courses
-
-```sql
-CREATE TABLE parsed_courses (
-    id BIGINT PRIMARY KEY,
-    job_id BIGINT,
-    semester INT,
-    course_code VARCHAR(50),
-    course_name VARCHAR(255),
-    credit INT,
-    tag VARCHAR(20),
-    confidence DECIMAL(5,2),
-    source_region_id VARCHAR(100)
-);
-```
-
-### rejected_rows
-
-```sql
-CREATE TABLE rejected_rows (
-    id BIGINT PRIMARY KEY,
-    job_id BIGINT,
-    raw_text TEXT,
-    reason VARCHAR(100),
-    severity VARCHAR(50),
-    suggestion TEXT,
-    source_region_id VARCHAR(100)
-);
-```
-
----
-
-## 22. Practical Implementation Priority
-
-### Phase 1: Basic Debug Visibility
-
-Implement first:
-
-```text
-file classification
-OCR pipeline for image/image-PDF
-raw OCR output storage
-stage logs
-rejected row logging
-frontend debug panel
-```
-
-Goal:
-
-```text
-When scraping fails, developers can see why.
-```
-
----
-
-### Phase 2: Better Image Extraction
+### Priority 1: Add Table Detection and Cropping
 
 Implement:
 
 ```text
-image preprocessing
-table detection
-table crop OCR
-row reconstruction by coordinates
-course-code normalization
-flexible regex parser
+OpenCV table-line detection
+contour detection
+table crop saving
+table crop preview in debug UI
 ```
 
-Goal:
+Success condition:
 
 ```text
-Improve subject detection from screenshot/image inputs.
+System detects 7 to 8 table regions from the curriculum image.
 ```
 
 ---
 
-### Phase 3: Validation and Confidence
+### Priority 2: OCR Each Table Crop Separately
+
+Implement:
+
+```text
+per-table OCR
+per-table OCR score
+per-table valid course-code count
+per-table rejected rows
+```
+
+Success condition:
+
+```text
+At least some tables produce readable rows with valid course codes.
+```
+
+---
+
+### Priority 3: Improve Per-Table Preprocessing
+
+Implement:
+
+```text
+upscale 2x or 3x
+threshold
+sharpen
+denoise
+compare OCR before and after preprocessing
+```
+
+Success condition:
+
+```text
+Valid course-code count increases after preprocessing.
+```
+
+---
+
+### Priority 4: Coordinate-Based Row and Column Reconstruction
+
+Implement:
+
+```text
+group OCR boxes by y-coordinate
+assign boxes to columns using x-coordinate
+build structured course row objects
+```
+
+Success condition:
+
+```text
+Parser receives structured fields instead of noisy raw lines.
+```
+
+---
+
+### Priority 5: Normalize and Repair OCR Text
+
+Implement:
+
+```text
+course-code spacing
+common OCR correction dictionary
+programme-code context repair
+logged corrections
+```
+
+Success condition:
+
+```text
+BIK31103 becomes BIK 31103 before parsing.
+```
+
+---
+
+### Priority 6: Layout-Based Semester Fallback
+
+Implement:
+
+```text
+semester assignment from table position
+configurable curriculum layout profile
+fallback if Sem column OCR fails
+```
+
+Success condition:
+
+```text
+Semesters detected even when OCR misses the Sem column.
+```
+
+---
+
+### Priority 7: Validation and Confidence
 
 Implement:
 
 ```text
 semester total validation
-overall credit validation
-row confidence score
-job confidence score
-status model
-manual review queue
+overall total validation
+row confidence
+job confidence
+manual review status
 ```
 
-Goal:
+Success condition:
 
 ```text
-Prevent bad data from being saved silently.
+System can tell whether extracted rows are complete and reliable.
 ```
 
 ---
 
-### Phase 4: Advanced Fallback
+### Priority 8: Vision Model Fallback
 
-Implement:
+If OCR + table extraction still fails:
 
 ```text
-vision model fallback
-AI-assisted JSON extraction
-schema validation
-human approval before saving
+send table crop or full image to vision-capable extraction model
+request strict JSON
+validate JSON with same validation engine
+mark fields for review
 ```
 
-Goal:
+This should be fallback only, not the primary method.
+
+---
+
+## 23. Most Likely Fix for the Current Failure
+
+Based on the latest screenshots, the immediate fix is:
 
 ```text
-Handle difficult images that OCR/table detection cannot parse reliably.
+1. Do not parse the current full-page OCR output.
+2. Add table detection before OCR parsing.
+3. Crop each semester table.
+4. Upscale each crop.
+5. OCR per crop.
+6. Reconstruct rows using coordinates.
+7. Normalize course codes.
+8. Assign semesters using table layout.
+9. Validate against credit totals.
+```
+
+This is the shortest path to getting subjects detected.
+
+---
+
+## 24. Acceptance Criteria
+
+The updated scraper should be considered successful when:
+
+```text
+1. It accepts image uploads directly.
+2. It does not require users to convert images to PDF.
+3. It detects table regions from the image.
+4. It produces table crop debug images.
+5. It extracts at least 80% of visible course rows automatically.
+6. It detects semester structure using OCR or layout fallback.
+7. It validates semester credit totals.
+8. It shows useful rejected row reasons.
+9. It never marks OCR as passed only because many characters were found.
+10. It gives a clear root cause when extraction fails.
 ```
 
 ---
 
-## 23. Most Likely Current Failure Causes
+## 25. Final Recommendation
 
-Based on the current UI showing `0 subjects detected`, the likely causes are:
+The scraper has already improved because it now gives useful debug output.
 
-```text
-1. Image-based PDF is being sent to normal PDF text scraper.
-2. OCR is not triggered for image-based PDFs.
-3. OCR runs but output is not stored or displayed.
-4. OCR output is fragmented and not reconstructed into rows.
-5. Course-code regex does not support BIK/UHB/UQI/UQ*/BI* formats.
-6. Parser expects semester structure before extracting rows.
-7. Semester column is missed by OCR, causing all rows to be ignored.
-8. Debug logs are not exposed to the frontend.
-```
+The next engineering step is not to keep changing regex blindly.
 
----
-
-## 24. Recommended Immediate Fix
-
-The immediate fix should be:
+The next engineering step is:
 
 ```text
-1. Detect image-based PDFs automatically.
-2. Route image-based PDFs and images to the same OCR pipeline.
-3. Save raw OCR text and OCR boxes.
-4. Display OCR sample in debug panel.
-5. Show stage-by-stage logs in the UI.
-6. Add rejected row logs with reasons.
-7. Update course-code regex to support BIK curriculum formats.
-8. Add layout-based semester fallback.
+Make the OCR layout-aware.
 ```
 
----
-
-## 25. Final Target Behavior
-
-When scraping works:
-
-```json
-{
-  "status": "SUCCESS",
-  "subjects_detected": 35,
-  "semesters_detected": [1, 2, 3, 4, 5, 6, 7],
-  "overall_total_found": 120,
-  "calculated_total": 120,
-  "confidence": 0.91
-}
-```
-
-When scraping partially works:
-
-```json
-{
-  "status": "NEEDS_REVIEW",
-  "subjects_detected": 31,
-  "warnings": 5,
-  "message": "Some rows require review. Overall total does not match.",
-  "debug_available": true
-}
-```
-
-When scraping fails:
-
-```json
-{
-  "status": "FAILED",
-  "subjects_detected": 0,
-  "message": "OCR succeeded but course parser rejected all rows.",
-  "root_cause": "course_code_regex_failed",
-  "next_action": "Update regex pattern and inspect rejected rows."
-}
-```
-
----
-
-## 26. Final Summary
-
-The main issue is not only image scraping accuracy. The bigger issue is lack of visibility.
-
-The scraper should be redesigned as a transparent pipeline:
+The final architecture should be:
 
 ```text
-extract
--> log
--> parse
--> validate
--> explain
--> review
+image
+→ table detection
+→ table crop
+→ crop enhancement
+→ OCR per table/cell
+→ row/column reconstruction
+→ normalization
+→ parser
+→ validation
+→ review UI
 ```
 
-The system must process image uploads directly. Users should not need to convert screenshots into PDFs.
+This will solve the current issue where OCR technically runs, but the parser receives corrupted full-page text.
 
-For every failed extraction, the system should show:
+The most important immediate feature to build is:
 
 ```text
-which stage failed
-why it failed
-what raw data was detected
-which rows were rejected
-what validation failed
-what the suggested fix is
+table crop detection + per-table OCR debug output
 ```
 
-This will make the scraper easier to debug, easier to improve, and safer for production use.
+Once that exists, every later bug becomes easier to diagnose because you can see exactly which table, row, or cell failed.

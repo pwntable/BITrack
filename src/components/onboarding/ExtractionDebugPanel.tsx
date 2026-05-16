@@ -69,8 +69,31 @@ export function ExtractionDebugPanel({ debug }: { debug: ExtractionResult }) {
       {/* Expanded content */}
       {isOpen && (
         <div className="border-t border-white/[0.06] p-4 space-y-4">
+          {/* Root cause banner */}
+          {debug.root_cause && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+              <p className="text-xs font-bold text-red-400 mb-1">Root Cause</p>
+              <p className="text-xs text-white/80">{debug.root_cause.replace(/_/g, ' ')}</p>
+            </div>
+          )}
+
+          {/* Next actions */}
+          {debug.next_actions && debug.next_actions.length > 0 && (
+            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+              <p className="text-xs font-bold text-primary mb-1.5">Suggested Next Actions</p>
+              <ul className="space-y-1">
+                {debug.next_actions.map((action, i) => (
+                  <li key={i} className="text-xs text-white/70 flex items-start gap-2">
+                    <span className="text-primary mt-0.5">→</span> {action}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Summary cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <SummaryCard label="Tables" value={debug.tables_detected} color={debug.tables_detected >= 3 ? 'emerald' : debug.tables_detected > 0 ? 'amber' : 'red'} />
             <SummaryCard label="Subjects" value={debug.courses.length} color={debug.courses.length > 0 ? 'emerald' : 'red'} />
             <SummaryCard label="Semesters" value={debug.semesters_detected.length} color={debug.semesters_detected.length >= 4 ? 'emerald' : 'amber'} />
             <SummaryCard label="Confidence" value={`${(debug.confidence * 100).toFixed(0)}%`} color={debug.confidence >= 0.7 ? 'emerald' : 'amber'} />

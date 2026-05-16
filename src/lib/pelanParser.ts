@@ -630,59 +630,145 @@ async function extractLinesViaOCR(
   }
 }
 
-// Wrapper that returns both lines and raw text for pipeline integration
+// Table-aware OCR: detect tables → crop → OCR each crop → structured output
 async function extractLinesViaOCRWithRaw(
   file: File,
   onProgress?: (pct: number) => void,
-): Promise<{ lines: PdfLine[]; rawText: string }> {
+): Promise<{ lines: PdfLine[]; rawText: string; tablesDetected: number }> {
   try {
     const Tesseract = await import('tesseract.js');
-    const worker = await Tesseract.createWorker('eng', 1, {
-      logger: (m: any) => {
-        if (m.status === 'recognizing text' && onProgress) {
-          onProgress(Math.round(m.progress * 100));
-        }
-      },
-    });
 
-    const getCanvasBlob = async (canvas: HTMLCanvasElement): Promise<Blob> =>
-      new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('Canvas toBlob failed')), 'image/png'));
-
-    let rawText = '';
-
-    if (file.type === 'application/pdf') {
-      const pdfjsLib = await import('pdfjs-dist');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = getPdfWorkerSrc();
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-      for (let p = 1; p <= Math.min(pdf.numPages, 4); p++) {
-        const page = await pdf.getPage(p);
+    // Helper: get image blob from a file (render PDF page if needed)
+    const getImageBlob = async (): Promise<Blob> => {
+      if (file.type === 'application/pdf') {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = getPdfWorkerSrc();
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const page = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 2.5 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as any).promise;
-        const blob = await getCanvasBlob(canvas);
-        const { data: { text } } = await worker.recognize(blob);
-        rawText += '\n' + text;
+        return new Promise<Blob>((res, rej) =>
+          canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), 'image/png')
+        );
       }
-    } else {
-      const { data: { text } } = await worker.recognize(file);
-      rawText = text;
+      return file;
+    };
+
+    const imageBlob = await getImageBlob();
+    onProgress?.(5);
+
+    // Try table detection
+    const { detectTableRegions, cropTableRegion } = await import('@/lib/tableDetector');
+    const detection = await detectTableRegions(imageBlob);
+    onProgress?.(15);
+
+    console.log(`[pelanParser] Table detection: found ${detection.regions.length} regions`);
+
+    // If we found enough tables, OCR each one separately
+    if (detection.regions.length >= 3) {
+      const worker = await Tesseract.createWorker('eng', 1, {
+        logger: (m: any) => {
+          if (m.status === 'recognizing text' && onProgress) {
+            const base = 20;
+            const perTable = 70 / detection.regions.length;
+            onProgress(base + Math.round(m.progress * perTable));
+          }
+        },
+      });
+
+      let rawText = '';
+      const allLines: PdfLine[] = [];
+
+      // Assign semester numbers based on table position (layout fallback)
+      const midX = detection.imageWidth / 2;
+      let semNumber = 0;
+      let currentYear = 1;
+
+      for (let i = 0; i < detection.regions.length; i++) {
+        const region = detection.regions[i];
+        const pct = Math.round(20 + (i / detection.regions.length) * 70);
+        onProgress?.(pct);
+
+        try {
+          // Crop and upscale 3x with contrast enhancement
+          const cropBlob = await cropTableRegion(imageBlob, region, 3, 10);
+          const { data: { text } } = await worker.recognize(cropBlob);
+
+          // Determine semester from layout position
+          const centerX = region.x + region.width / 2;
+          const isLeft = centerX < midX;
+
+          // Each row of tables = left then right
+          // Semesters go: 1(left), 2(right), 3(left), 4(right), etc.
+          if (i === 0 || (i > 0 && region.y - detection.regions[i - 1].y > detection.imageHeight * 0.1)) {
+            // New row of tables
+            if (isLeft) {
+              semNumber++;
+              currentYear = Math.ceil(semNumber / 2);
+            }
+          } else if (!isLeft && i > 0) {
+            semNumber++;
+          }
+
+          // Prefix with layout markers
+          const tableHeader = `\nTAHUN ${currentYear}\nSem ${semNumber}\n`;
+          rawText += tableHeader + text + '\n';
+
+          // Convert to PdfLine[]
+          const tableLines = text.split('\n').map((t: string, j: number) => ({
+            text: t.trim(),
+            x: region.x,
+            y: region.y + j * 12,
+          })).filter((l: PdfLine) => l.text.length > 0);
+
+          // Add semester context lines
+          allLines.push(
+            { text: `TAHUN ${currentYear}`, x: region.x, y: region.y - 2 },
+            { text: `${semNumber}`, x: region.x, y: region.y - 1 },
+            ...tableLines,
+          );
+
+          console.log(`[pelanParser] Table ${i + 1} (sem ${semNumber}): ${tableLines.length} lines from OCR`);
+
+        } catch (cropErr) {
+          console.warn(`[pelanParser] Failed to crop/OCR table ${i + 1}:`, cropErr);
+        }
+      }
+
+      await worker.terminate();
+      onProgress?.(95);
+
+      if (allLines.length > 0) {
+        return { lines: allLines, rawText, tablesDetected: detection.regions.length };
+      }
     }
 
+    // Fallback: full-page OCR if table detection failed
+    console.log('[pelanParser] Table detection insufficient, falling back to full-page OCR');
+    const worker = await Tesseract.createWorker('eng', 1, {
+      logger: (m: any) => {
+        if (m.status === 'recognizing text' && onProgress) {
+          onProgress(20 + Math.round(m.progress * 70));
+        }
+      },
+    });
+
+    const { data: { text: rawText } } = await worker.recognize(imageBlob);
     await worker.terminate();
 
     const lines = rawText
       .split('\n')
-      .map((text, i) => ({ text: text.trim(), x: 0, y: 10000 - i * 12 }))
-      .filter(l => l.text.length > 0);
+      .map((text: string, i: number) => ({ text: text.trim(), x: 0, y: 10000 - i * 12 }))
+      .filter((l: PdfLine) => l.text.length > 0);
 
-    return { lines, rawText };
+    return { lines, rawText, tablesDetected: 0 };
   } catch (err) {
     console.error('[pelanParser] OCR failed:', err);
-    return { lines: [], rawText: '' };
+    return { lines: [], rawText: '', tablesDetected: 0 };
   }
 }
 
@@ -749,14 +835,16 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
   let isColumnar = false;
   let ocrRawText = '';
   let usedOCR = false;
+  let tablesDetected = 0;
 
   if (isImage) {
-    onProgress({ step: 'running-ocr', message: 'Running OCR on image…', progress: 20 });
-    const { lines, rawText } = await extractLinesViaOCRWithRaw(file, pct =>
+    onProgress({ step: 'running-ocr', message: 'Detecting tables & running OCR…', progress: 20 });
+    const result = await extractLinesViaOCRWithRaw(file, pct =>
       onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 20 + Math.round(pct * 0.5) })
     );
-    bestLines = lines;
-    ocrRawText = rawText;
+    bestLines = result.lines;
+    ocrRawText = result.rawText;
+    tablesDetected = result.tablesDetected;
     usedOCR = true;
   } else {
     onProgress({ step: 'extracting-text', message: 'Extracting text…', progress: 15 });
@@ -772,15 +860,16 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
 
     if (subjectCount < 3) {
       // Fall back to OCR for scanned PDFs
-      onProgress({ step: 'running-ocr', message: 'Scanned PDF detected — running OCR…', progress: 30 });
-      const { lines: ocrLines, rawText } = await extractLinesViaOCRWithRaw(file, pct =>
+      onProgress({ step: 'running-ocr', message: 'Scanned PDF — detecting tables & running OCR…', progress: 30 });
+      const result = await extractLinesViaOCRWithRaw(file, pct =>
         onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 30 + Math.round(pct * 0.4) })
       );
-      const ocrCount = ocrLines.filter(l => parseSubjectLine(l.text) !== null).length;
+      const ocrCount = result.lines.filter(l => parseSubjectLine(l.text) !== null).length;
       if (ocrCount > subjectCount) {
-        bestLines = ocrLines;
+        bestLines = result.lines;
         isColumnar = false;
-        ocrRawText = rawText;
+        ocrRawText = result.rawText;
+        tablesDetected = result.tablesDetected;
         usedOCR = true;
       }
     }
@@ -794,7 +883,7 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
   let debug: import('@/lib/imageScraperPipeline').ExtractionResult | undefined;
   if (usedOCR && ocrRawText) {
     const { runImageExtractionPipeline } = await import('@/lib/imageScraperPipeline');
-    debug = runImageExtractionPipeline(ocrRawText, isImage ? 'image' : 'scanned_pdf');
+    debug = runImageExtractionPipeline(ocrRawText, isImage ? 'image' : 'scanned_pdf', tablesDetected);
   }
 
   // Use columnar parser if columnar extraction was used, otherwise standard parser

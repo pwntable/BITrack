@@ -149,8 +149,75 @@ Jumlah Keseluruhan Kredit 120`;
     expect(course?.auto_corrected).toBe(true);
   });
 
+  it('corrects BK to BIK (2-letter prefix)', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BK 10103 Prinsip Kejuruteraan 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const course = result.courses.find(c => c.course_code === 'BIK 10103');
+    expect(course).toBeDefined();
+    expect(course?.auto_corrected).toBe(true);
+  });
+
+  it('corrects common Malay word OCR errors', () => {
+    const ocrText = `PROGRAM (BIK)
+TAHUN 1
+1 BIK 20203 Kejurteran Sistem Persian 3
+Jumlah Keseluruhan Kredit 120`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const course = result.courses.find(c => c.course_code === 'BIK 20203');
+    expect(course).toBeDefined();
+    expect(course?.course_name).toContain('Kejuruteraan');
+    expect(course?.course_name).toContain('Perisian');
+  });
+
   it('returns FAILED for empty OCR text', () => {
     const result = runImageExtractionPipeline('', 'image');
     expect(result.status).toBe('FAILED');
+  });
+});
+
+describe('table detection stage', () => {
+  it('reports table_detection as passed when tables >= 3', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 8);
+    const stage = result.stages.find(s => s.stage === 'table_detection');
+    expect(stage?.status).toBe('passed');
+  });
+
+  it('reports table_detection as failed when no tables', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 0);
+    const stage = result.stages.find(s => s.stage === 'table_detection');
+    expect(stage?.status).toBe('failed');
+  });
+
+  it('includes tables_detected in result', () => {
+    const result = runImageExtractionPipeline(BIK_OCR_TEXT, 'image', 7);
+    expect(result.tables_detected).toBe(7);
+  });
+});
+
+describe('domain-aware OCR quality', () => {
+  it('fails OCR quality when no course codes found', () => {
+    const ocrText = `This is some random text without any course codes
+    Another line of gibberish text
+    More random content here
+    Some numbers 123 456 789`;
+    const result = runImageExtractionPipeline(ocrText, 'image');
+    const ocrStage = result.stages.find(s => s.stage === 'ocr_quality');
+    expect(ocrStage?.status).toBe('failed');
+  });
+});
+
+describe('root cause and next actions', () => {
+  it('provides root cause when extraction fails', () => {
+    const ocrText = `Some corrupted OCR text
+    No valid course data here
+    Just random text across many lines
+    Continuing with more lines for character count
+    Even more text to pass the 50-char minimum`;
+    const result = runImageExtractionPipeline(ocrText, 'image', 0);
+    expect(result.root_cause).toBeDefined();
+    expect(result.next_actions.length).toBeGreaterThan(0);
   });
 });
