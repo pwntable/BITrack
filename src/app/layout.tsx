@@ -22,8 +22,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "BITrack — Academic Progress Tracker",
-  description: "Premium 120-credit graduation requirement tracker for UTHM BIT students.",
+  title: "UTHMPelan — Academic Progress Tracker",
+  description: "Track your graduation progress for any UTHM programme. Upload your Pelan Pengajian and manage your academic journey — all on your device.",
   manifest: process.env.NODE_ENV === 'production' ? '/BITrack/manifest-v2.json' : '/manifest-v2.json',
   icons: {
     apple: "/icon-192x192.png",

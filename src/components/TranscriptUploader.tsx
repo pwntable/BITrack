@@ -5,9 +5,8 @@ import { renderPdfToImages } from '@/lib/pdfRenderer';
 import { runOcrBatch } from '@/lib/ocrWorkerPool';
 import { extractSubjects } from '@/lib/extractionEngine';
 import { useProgressStore } from '@/store/progressStore';
+import { useCurriculumStore } from '@/store/curriculumStore';
 import { gradeRank } from '@/lib/gradeUtils';
-import curriculumData from '@/data/curriculum.json';
-import electivesData from '@/data/electives.json';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -111,24 +110,7 @@ function imageToCanvas(file: File): Promise<HTMLCanvasElement> {
   });
 }
 
-function getCreditsForSubject(code: string): number {
-  const normalizedSearch = code.replace(/\s+/g, '').toUpperCase();
-  for (const year of curriculumData.curriculum) {
-    for (const sem of year.semesters) {
-      for (const sub of sem.subjects) {
-        if (sub.code.replace(/\s+/g, '').toUpperCase() === normalizedSearch) {
-          return sub.credits;
-        }
-      }
-    }
-  }
-  for (const sub of electivesData) {
-    if (sub.code.replace(/\s+/g, '').toUpperCase() === normalizedSearch) {
-      return sub.credits;
-    }
-  }
-  return 3; // Fallback default
-}
+// getCreditsForSubject is now inlined inside TranscriptUploader using curriculum context
 
 export function TranscriptUploader() {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -137,7 +119,12 @@ export function TranscriptUploader() {
   const [isDragging, setIsDragging] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { upsertSubject, completedSubjects, uploadHistory, deleteUploadHistory, addUploadHistory } = useProgressStore();
+  const { upsertSubject, getSubjects, getHistory, deleteUploadHistory, addUploadHistory } = useProgressStore();
+  const { getActiveCurriculum } = useCurriculumStore();
+  const curriculum = getActiveCurriculum();
+  const programCode = curriculum?.program_code ?? '';
+  const completedSubjects = getSubjects(programCode);
+  const uploadHistory = getHistory(programCode);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -177,13 +164,24 @@ export function TranscriptUploader() {
         setStatusText(`Extracting text... (${completed}/${total} pages)`);
       });
 
-      // 3. Subject Extraction
+      // 3. Subject Extraction — use active curriculum subjects
       setStatusText('Analyzing transcript data...');
-      const extractedSubjects = extractSubjects(rawTexts);
+      const allSubjects = [
+        ...(curriculum?.curriculum.flatMap(y => y.semesters.flatMap(s => s.subjects)) ?? []),
+        ...(curriculum?.elective_pool ?? []),
+      ];
+      const extractedSubjects = extractSubjects(rawTexts, allSubjects);
+
+      // Helper: get credits from active curriculum
+      const getCreditsForSubject = (code: string): number => {
+        const normalised = code.replace(/\s+/g, '').toUpperCase();
+        const found = allSubjects.find(s => s.code.replace(/\s+/g, '').toUpperCase() === normalised);
+        return found?.credits ?? 3;
+      };
 
       if (extractedSubjects.length === 0) {
-        toast.warning('No valid subjects found', { 
-          description: 'No matching BIT curriculum subjects could be extracted. Please ensure the transcript is readable.' 
+        toast.warning('No valid subjects found', {
+          description: 'No matching curriculum subjects could be extracted. Please ensure the transcript is readable.',
         });
         return;
       }
@@ -204,7 +202,7 @@ export function TranscriptUploader() {
         }
         
         const credits = getCreditsForSubject(subject.code);
-        upsertSubject(subject.code, subject.grade, credits);
+        upsertSubject(programCode, subject.code, subject.grade, credits);
       }
 
       // Store file in IndexedDB
@@ -212,7 +210,7 @@ export function TranscriptUploader() {
       await set(fileId, file);
 
       // Record the upload in history
-      addUploadHistory(file.name, extractedSubjects, fileId);
+      addUploadHistory(programCode, file.name, extractedSubjects, fileId);
 
       toast.success('Extraction Complete', {
         description: `${imported} subjects imported/updated, ${skipped} already known (ignored).`,
@@ -251,7 +249,7 @@ export function TranscriptUploader() {
     if (historyItem.fileId) {
       await del(historyItem.fileId);
     }
-    deleteUploadHistory(historyItem.id);
+    deleteUploadHistory(programCode, historyItem.id);
     toast.info('Upload record removed');
   };
 

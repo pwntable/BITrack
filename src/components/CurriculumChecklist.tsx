@@ -2,16 +2,17 @@
 
 import React from 'react';
 import { useProgressStore } from '@/store/progressStore';
-import curriculumData from '@/data/curriculum.json';
+import { useCurriculumStore } from '@/store/curriculumStore';
+import type { ParsedSubject } from '@/store/curriculumStore';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
-  DropdownMenuLabel, 
-  DropdownMenuSeparator, 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   DropdownMenuGroup
 } from '@/components/ui/dropdown-menu';
@@ -28,25 +29,31 @@ function getGradeColor(grade: string) {
 }
 
 export function CurriculumChecklist() {
-  const { completedSubjects, markIncomplete, upsertSubject } = useProgressStore();
+  const { getActiveCurriculum } = useCurriculumStore();
+  const { getSubjects, markIncomplete, upsertSubject } = useProgressStore();
   const [expandedSems, setExpandedSems] = React.useState<string[]>([]);
 
-  // Initialize expanded semesters on mount
+  const curriculum = getActiveCurriculum();
+  const programCode = curriculum?.program_code ?? '';
+  const completedSubjects = getSubjects(programCode);
+
+  // Expand all semesters on mount / curriculum change
   React.useEffect(() => {
-    const allSems = curriculumData.curriculum.flatMap(y => 
+    if (!curriculum) return;
+    const allSems = curriculum.curriculum.flatMap(y =>
       y.semesters.map(s => `y${y.year}-s${s.semester}`)
     );
     setExpandedSems(allSems);
-  }, []);
+  }, [curriculum?.id]);
 
   // Handle scroll-to-subject event
   React.useEffect(() => {
     const handleScrollEvent = (e: any) => {
       const code = e.detail?.code;
-      if (!code) return;
+      if (!code || !curriculum) return;
 
-      let targetSemId = "";
-      for (const year of curriculumData.curriculum) {
+      let targetSemId = '';
+      for (const year of curriculum.curriculum) {
         for (const sem of year.semesters) {
           if (sem.subjects.some(s => s.code === code)) {
             targetSemId = `y${year.year}-s${sem.semester}`;
@@ -57,7 +64,6 @@ export function CurriculumChecklist() {
 
       if (targetSemId) {
         setExpandedSems(prev => prev.includes(targetSemId) ? prev : [...prev, targetSemId]);
-        
         setTimeout(() => {
           const element = document.getElementById(`subject-${code}`);
           if (element) {
@@ -71,46 +77,53 @@ export function CurriculumChecklist() {
 
     window.addEventListener('scroll-to-subject' as any, handleScrollEvent);
     return () => window.removeEventListener('scroll-to-subject' as any, handleScrollEvent);
-  }, []);
+  }, [curriculum]);
 
-  const handleToggle = (checked: boolean, code: string, credits: number) => {
+  if (!curriculum) {
+    return (
+      <div className="text-center py-20 text-muted-foreground text-sm italic">
+        No curriculum loaded. Upload your Pelan Pengajian to get started.
+      </div>
+    );
+  }
+
+  const handleToggle = (checked: boolean, subject: ParsedSubject) => {
     if (checked) {
-      if (!completedSubjects[code]) {
-        upsertSubject(code, 'A', credits);
+      if (!completedSubjects[subject.code]) {
+        upsertSubject(programCode, subject.code, 'A', subject.credits);
       }
     } else {
-      markIncomplete(code);
+      markIncomplete(programCode, subject.code);
     }
   };
 
-  const isPrerequisiteMet = (prerequisite: string | null) => {
+  const isPrerequisiteMet = (prerequisite: string | null | undefined) => {
     if (!prerequisite) return true;
     const prereqSubject = completedSubjects[prerequisite];
     if (!prereqSubject) return false;
-    const retakeGrades = ['D+', 'D', 'D-', 'E', 'F'];
-    return !retakeGrades.includes(prereqSubject.grade);
+    return !['D+', 'D', 'D-', 'E', 'F'].includes(prereqSubject.grade);
   };
 
-  // Compute per-semester progress
-  const getSemesterProgress = (subjects: typeof curriculumData.curriculum[0]['semesters'][0]['subjects']) => {
+  const getSemesterProgress = (subjects: ParsedSubject[]) => {
     const total = subjects.length;
     const completed = subjects.filter(s => !!completedSubjects[s.code]).length;
     return { total, completed };
   };
 
+  // Display code strips internal uniqueness suffix (e.g. "UQ 11 (I)" → "UQ 11")
+  const displayCode = (code: string) => code.replace(/\s*\([IVX]+\)$/i, '');
+
   return (
     <div className="w-full space-y-8">
-      {curriculumData.curriculum.map((yearObj) => (
+      {curriculum.curriculum.map((yearObj) => (
         <div key={yearObj.year} className="space-y-4">
           <div className="flex items-center gap-3">
             <BookMarked className="h-5 w-5 text-primary" />
-            <h2 className="text-lg font-bold tracking-tight text-white">
-              Year {yearObj.year}
-            </h2>
+            <h2 className="text-lg font-bold tracking-tight text-white">Year {yearObj.year}</h2>
             <span className="h-px flex-1 bg-white/[0.06]" />
           </div>
-          <Accordion 
-            className="w-full space-y-2" 
+          <Accordion
+            className="w-full space-y-2"
             value={expandedSems}
             onValueChange={setExpandedSems}
           >
@@ -119,8 +132,8 @@ export function CurriculumChecklist() {
               const progressPct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
 
               return (
-                <AccordionItem 
-                  key={`y${yearObj.year}-s${semObj.semester}`} 
+                <AccordionItem
+                  key={`y${yearObj.year}-s${semObj.semester}`}
                   value={`y${yearObj.year}-s${semObj.semester}`}
                   className="glass rounded-xl overflow-hidden border-none"
                 >
@@ -130,18 +143,14 @@ export function CurriculumChecklist() {
                       <Badge variant="outline" className="text-[10px] font-bold tracking-wider text-muted-foreground border-white/10">
                         {progress.completed}/{progress.total}
                       </Badge>
-                      {/* Mini progress bar */}
                       <div className="hidden sm:flex flex-1 max-w-[120px] h-1 rounded-full bg-white/[0.06] overflow-hidden">
-                        <div 
-                          className="h-full rounded-full bg-primary transition-all duration-500" 
-                          style={{ width: `${progressPct}%` }}
-                        />
+                        <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${progressPct}%` }} />
                       </div>
                     </div>
                   </AccordionTrigger>
                   <AccordionContent className="pt-1 pb-4 px-3 sm:px-5">
                     {semObj.subjects.length === 0 ? (
-                      <div className="text-sm text-muted-foreground italic py-4 text-center">No core subjects.</div>
+                      <div className="text-sm text-muted-foreground italic py-4 text-center">No subjects.</div>
                     ) : (
                       <div className="flex flex-col gap-2">
                         {semObj.subjects.map((subject, idx) => {
@@ -151,11 +160,11 @@ export function CurriculumChecklist() {
 
                           return (
                             <div
-                              key={`${subject.code}-${subject.name}-${idx}`}
+                              key={`${subject.code}-${idx}`}
                               id={`subject-${subject.code}`}
                               className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg transition-all duration-300 ${
-                                isCompleted 
-                                  ? 'bg-primary/[0.06] border border-primary/10' 
+                                isCompleted
+                                  ? 'bg-primary/[0.06] border border-primary/10'
                                   : 'bg-white/[0.02] border border-transparent hover:border-white/[0.06] hover:bg-white/[0.03]'
                               }`}
                             >
@@ -164,23 +173,24 @@ export function CurriculumChecklist() {
                                   <Checkbox
                                     checked={isCompleted}
                                     disabled={!prereqMet && !isCompleted}
-                                    onCheckedChange={(checked) => handleToggle(checked as boolean, subject.code, subject.credits)}
+                                    onCheckedChange={(checked) => handleToggle(checked as boolean, subject)}
                                   />
                                 </div>
                                 <div className="flex flex-col gap-0.5">
                                   <div className="flex items-center gap-2">
                                     <span className={`font-mono text-xs font-bold tracking-wide ${isCompleted ? 'text-primary' : 'text-white'}`}>
-                                      {subject.code.replace(/\s*\([IV]+\)$/i, '')}
+                                      {displayCode(subject.code)}
                                     </span>
+                                    {subject.is_elective && (
+                                      <Badge variant="outline" className="text-[9px] font-bold border-primary/20 text-primary/70">Elective</Badge>
+                                    )}
                                     {!prereqMet && !isCompleted && (
                                       <span title={`Requires ${subject.prerequisite}`}>
                                         <Lock className="h-3 w-3 text-amber-400/70" />
                                       </span>
                                     )}
                                   </div>
-                                  <span className={`text-xs leading-tight ${
-                                    !prereqMet && !isCompleted ? 'text-muted-foreground/60' : 'text-muted-foreground'
-                                  }`}>
+                                  <span className={`text-xs leading-tight ${!prereqMet && !isCompleted ? 'text-muted-foreground/60' : 'text-muted-foreground'}`}>
                                     {subject.name}
                                   </span>
                                 </div>
@@ -190,7 +200,6 @@ export function CurriculumChecklist() {
                                 <Badge variant="outline" className="shrink-0 text-[10px] font-bold border-white/10 text-muted-foreground">
                                   {subject.credits} CR
                                 </Badge>
-
                                 {isCompleted && (
                                   <DropdownMenu>
                                     <DropdownMenuTrigger>
@@ -204,10 +213,10 @@ export function CurriculumChecklist() {
                                         <DropdownMenuLabel className="text-xs">Adjust Grade</DropdownMenuLabel>
                                         <DropdownMenuSeparator />
                                         {ALL_GRADES.map((g) => (
-                                          <DropdownMenuItem 
-                                            key={g} 
+                                          <DropdownMenuItem
+                                            key={g}
                                             className="text-sm cursor-pointer"
-                                            onClick={() => upsertSubject(subject.code, g, subject.credits)}
+                                            onClick={() => upsertSubject(programCode, subject.code, g, subject.credits)}
                                           >
                                             {g}
                                           </DropdownMenuItem>

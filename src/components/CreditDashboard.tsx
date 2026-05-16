@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useProgressStore, LINKED_SUBJECTS } from '@/store/progressStore';
+import { useProgressStore } from '@/store/progressStore';
+import { useCurriculumStore } from '@/store/curriculumStore';
 import { calculateCGPA } from '@/lib/gradeUtils';
-import curriculumData from '@/data/curriculum.json';
 import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, Lock, CheckCircle, RotateCcw, BookOpen, ArrowRight } from 'lucide-react';
-
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import {
@@ -21,91 +20,69 @@ import {
 } from '@/components/ui/alert-dialog';
 
 export function CreditDashboard() {
-  const { completedSubjects, alerts, getTotalCredits, resetAll } = useProgressStore();
+  const { getSubjects, getAlerts, getTotalCredits, resetProgram } = useProgressStore();
+  const { getActiveCurriculum, getTotalSlots } = useCurriculumStore();
   const [mounted, setMounted] = useState(false);
   const [isResetOpen, setIsResetOpen] = useState(false);
 
-  // Avoid hydration mismatch by only rendering after mount
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  useEffect(() => { setMounted(true); }, []);
 
   if (!mounted) {
     return <div className="animate-pulse glass rounded-2xl h-[400px] w-full" />;
   }
 
-  const earned = getTotalCredits();
-  const target = 120;
+  const curriculum = getActiveCurriculum();
+  const programCode = curriculum?.program_code ?? '';
+  const completedSubjects = getSubjects(programCode);
+  const alerts = getAlerts(programCode);
+
+  const target = curriculum?.total_credits_required ?? 120;
+  const linkedSubjects = curriculum?.linked_subjects ?? [];
+  const earned = getTotalCredits(programCode, linkedSubjects);
   const percentage = Math.min(earned / target, 1);
   const remainingCredits = Math.max(0, target - earned);
-  
+
   const currentCGPA = calculateCGPA(completedSubjects);
 
-  // Compute metrics
+  // Metrics
   const retakeCount = alerts.filter(a => a.type === 'retake').length;
-  
-  // Deduplicate passed subjects for count (e.g. Islam/Moral link)
-  const getDeduplicatedCount = (subjects: Record<string, any>) => {
-    const codes = Object.keys(subjects);
+
+  // Deduplicate passed subjects count using curriculum's linked pairs
+  const getDeduplicatedPassedCount = () => {
+    const codes = Object.keys(completedSubjects);
     const countedLinks = new Set<string>();
     let count = 0;
-    
     for (const code of codes) {
-      if (LINKED_SUBJECTS[code]) {
-        const partner = LINKED_SUBJECTS[code];
-        if (countedLinks.has(partner)) continue;
-        countedLinks.add(code);
+      const pair = linkedSubjects.find(([a, b]) => a === code || b === code);
+      if (pair) {
+        const key = pair.join('|');
+        if (countedLinks.has(key)) continue;
+        countedLinks.add(key);
       }
       count++;
     }
     return count;
   };
 
-  const totalPassedCount = getDeduplicatedCount(completedSubjects) - retakeCount;
-  
-  // Deduplicate curriculum slots
-  const calculateTotalSlots = () => {
-    const allCodes = curriculumData.curriculum.flatMap(y => 
-      y.semesters.flatMap(s => s.subjects.map(sub => sub.code))
-    );
-    const countedLinks = new Set<string>();
-    let total = 0;
-    
-    for (const code of allCodes) {
-      if (LINKED_SUBJECTS[code]) {
-        const partner = LINKED_SUBJECTS[code];
-        if (countedLinks.has(partner)) continue;
-        countedLinks.add(code);
-      }
-      total++;
-    }
-    return total;
-  };
+  const totalPassedCount = getDeduplicatedPassedCount() - retakeCount;
+  const totalSlots = getTotalSlots();
+  const remainingSubjectsCount = Math.max(0, totalSlots - totalPassedCount);
 
-  const totalSubjects = calculateTotalSlots();
-  const remainingSubjectsCount = Math.max(0, totalSubjects - totalPassedCount);
-
-  // SVG parameters
+  // SVG ring
   const size = 200;
   const strokeWidth = 14;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - percentage * circumference;
 
-  // Dynamic ring colors
   let ringStroke = '#0f766e';
   let ringGlow = 'drop-shadow(0 0 8px rgba(15, 118, 110, 0.4))';
-  if (earned >= 100) {
-    ringStroke = '#22c55e';
-    ringGlow = 'drop-shadow(0 0 8px rgba(34, 197, 94, 0.4))';
-  } else if (earned >= 60) {
-    ringStroke = '#f59e0b';
-    ringGlow = 'drop-shadow(0 0 8px rgba(245, 158, 11, 0.4))';
-  }
+  if (earned >= 100) { ringStroke = '#22c55e'; ringGlow = 'drop-shadow(0 0 8px rgba(34, 197, 94, 0.4))'; }
+  else if (earned >= 60) { ringStroke = '#f59e0b'; ringGlow = 'drop-shadow(0 0 8px rgba(245, 158, 11, 0.4))'; }
 
   const confirmReset = () => {
-    resetAll();
-    toast.success('All progress has been reset.');
+    resetProgram(programCode);
+    toast.success('Progress reset for this programme.');
     setIsResetOpen(false);
   };
 
@@ -113,12 +90,11 @@ export function CreditDashboard() {
     <div className="flex flex-col gap-8 w-full">
       {/* Progress Ring + CGPA */}
       <div className="relative glass-strong rounded-2xl p-6 sm:p-10 overflow-hidden">
-        {/* Reset Button Positioned Top-Right */}
         <div className="absolute top-4 right-4 z-20">
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={() => setIsResetOpen(true)} 
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsResetOpen(true)}
             className="text-[10px] h-7 font-bold uppercase tracking-widest text-muted-foreground/40 hover:text-red-400 hover:bg-red-400/10 transition-all gap-1.5 px-2"
           >
             <RotateCcw className="h-3 w-3" />
@@ -129,43 +105,21 @@ export function CreditDashboard() {
         <div className="flex flex-col sm:flex-row items-center gap-8">
           {/* Ring */}
           <div className="relative flex items-center justify-center w-44 h-44 sm:w-52 sm:h-52 shrink-0">
-            {/* Pulsing outer ring */}
             <div className="absolute inset-0 rounded-full border border-primary/20 animate-pulse-ring" />
-            <svg
-              className="w-full h-full transform -rotate-90"
-              viewBox={`0 0 ${size} ${size}`}
-              style={{ filter: ringGlow }}
-            >
-              {/* Background track */}
-              <circle
-                cx={size / 2} cy={size / 2} r={radius}
-                stroke="currentColor" strokeWidth={strokeWidth}
-                fill="transparent"
-                className="text-white/[0.06]"
-              />
-              {/* Progress arc */}
-              <circle
-                cx={size / 2} cy={size / 2} r={radius}
-                stroke={ringStroke} strokeWidth={strokeWidth}
-                fill="transparent"
-                strokeDasharray={circumference}
-                strokeDashoffset={strokeDashoffset}
-                strokeLinecap="round"
+            <svg className="w-full h-full transform -rotate-90" viewBox={`0 0 ${size} ${size}`} style={{ filter: ringGlow }}>
+              <circle cx={size / 2} cy={size / 2} r={radius} stroke="currentColor" strokeWidth={strokeWidth} fill="transparent" className="text-white/[0.06]" />
+              <circle cx={size / 2} cy={size / 2} r={radius} stroke={ringStroke} strokeWidth={strokeWidth} fill="transparent"
+                strokeDasharray={circumference} strokeDashoffset={strokeDashoffset} strokeLinecap="round"
                 className="transition-all duration-1000 ease-out"
               />
             </svg>
-            {/* Center text */}
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-              <span className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
-                {earned}
-              </span>
-              <span className="text-[11px] sm:text-xs text-muted-foreground font-medium tracking-wide">
-                / 120 credits
-              </span>
+              <span className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">{earned}</span>
+              <span className="text-[11px] sm:text-xs text-muted-foreground font-medium tracking-wide">/ {target} credits</span>
             </div>
           </div>
 
-          {/* CGPA + Stats */}
+          {/* CGPA + stats */}
           <div className="flex-1 text-center sm:text-left space-y-4">
             <div>
               <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold mb-1">Estimated CGPA</p>
@@ -187,64 +141,42 @@ export function CreditDashboard() {
         </div>
       </div>
 
-      {/* Reset Confirmation */}
+      {/* Reset Dialog */}
       <AlertDialog open={isResetOpen} onOpenChange={setIsResetOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-red-500">Reset All Progress?</AlertDialogTitle>
+            <AlertDialogTitle className="text-red-500">Reset Progress?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete all your selected subjects, grades, and upload history. This action cannot be undone.
+              This will clear all completed subjects and upload history for <strong>{curriculum?.program_name}</strong>. Other programmes are unaffected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmReset} className="bg-red-500 hover:bg-red-600">
-              Reset Everything
-            </AlertDialogAction>
+            <AlertDialogAction onClick={confirmReset} className="bg-red-500 hover:bg-red-600">Reset</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-teal-accent/5 transition-all duration-300 group">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Total Passed</span>
-            <CheckCircle className="h-4 w-4 text-green-400 opacity-60 group-hover:opacity-100 transition-opacity" />
+        {[
+          { label: 'Total Passed', value: totalPassedCount, sub: 'subjects completed', icon: CheckCircle, color: 'text-green-400' },
+          { label: 'Retake Required', value: retakeCount, sub: 'needs attention', icon: RotateCcw, color: retakeCount > 0 ? 'text-amber-400' : 'text-white', valueColor: retakeCount > 0 ? 'text-amber-400' : 'text-white' },
+          { label: 'Remaining Credits', value: remainingCredits, sub: 'credits to go', icon: ArrowRight, color: 'text-primary' },
+          { label: 'Remaining Subs', value: remainingSubjectsCount, sub: 'subjects left', icon: BookOpen, color: 'text-primary' },
+        ].map(({ label, value, sub, icon: Icon, color, valueColor }) => (
+          <div key={label} className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">{label}</span>
+              <Icon className={`h-4 w-4 ${color} opacity-60 group-hover:opacity-100 transition-opacity`} />
+            </div>
+            <div className={`text-2xl sm:text-3xl font-extrabold ${valueColor ?? 'text-white'}`}>{value}</div>
+            <p className="text-[10px] text-muted-foreground mt-1">{sub}</p>
           </div>
-          <div className="text-2xl sm:text-3xl font-extrabold text-white">{totalPassedCount}</div>
-          <p className="text-[10px] text-muted-foreground mt-1">subjects completed</p>
-        </div>
-
-        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-amber-accent/5 transition-all duration-300 group">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Retake Required</span>
-            <RotateCcw className="h-4 w-4 text-amber-400 opacity-60 group-hover:opacity-100 transition-opacity" />
-          </div>
-          <div className={`text-2xl sm:text-3xl font-extrabold ${retakeCount > 0 ? 'text-amber-400' : 'text-white'}`}>{retakeCount}</div>
-          <p className="text-[10px] text-muted-foreground mt-1">needs attention</p>
-        </div>
-
-        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Remaining Credits</span>
-            <ArrowRight className="h-4 w-4 text-primary opacity-60 group-hover:opacity-100 transition-opacity" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold text-white">{remainingCredits}</div>
-          <p className="text-[10px] text-muted-foreground mt-1">credits to go</p>
-        </div>
-
-        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Remaining Subs</span>
-            <BookOpen className="h-4 w-4 text-primary opacity-60 group-hover:opacity-100 transition-opacity" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-extrabold text-white">{remainingSubjectsCount}</div>
-          <p className="text-[10px] text-muted-foreground mt-1">subjects left</p>
-        </div>
+        ))}
       </div>
 
-      {/* Action Items (Alerts) */}
+      {/* Alerts */}
       {alerts.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Action Items</h3>
@@ -252,30 +184,21 @@ export function CreditDashboard() {
             {alerts.map((alert, idx) => (
               <div
                 key={`${alert.code}-${idx}`}
-                className="glass rounded-xl p-4 border-l-[3px] border-l-amber-500 cursor-pointer hover:bg-white/[0.06] transition-all duration-200 active:scale-[0.995] animate-glow-amber group"
+                className="glass rounded-xl p-4 border-l-[3px] border-l-amber-500 cursor-pointer hover:bg-white/[0.06] transition-all duration-200 active:scale-[0.995] group"
                 onClick={() => window.dispatchEvent(new CustomEvent('scroll-to-subject', { detail: { code: alert.code } }))}
                 role="button"
                 tabIndex={0}
-                aria-label={`Resolve alert for ${alert.code}`}
               >
                 <div className="flex items-start gap-4">
                   <div className="mt-0.5 p-1.5 rounded-lg bg-amber-500/10">
-                    {alert.type === 'retake' ? (
-                      <AlertTriangle className="h-4 w-4 text-amber-400" />
-                    ) : (
-                      <Lock className="h-4 w-4 text-amber-400" />
-                    )}
+                    {alert.type === 'retake' ? <AlertTriangle className="h-4 w-4 text-amber-400" /> : <Lock className="h-4 w-4 text-amber-400" />}
                   </div>
                   <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm text-white">{alert.code}</span>
-                      <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-widest border-amber-500/30 text-amber-400">
-                        {alert.type}
-                      </Badge>
+                      <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-widest border-amber-500/30 text-amber-400">{alert.type}</Badge>
                     </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {alert.message}
-                    </p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{alert.message}</p>
                   </div>
                   <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-primary group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
                 </div>

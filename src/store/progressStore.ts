@@ -21,189 +21,237 @@ export interface UploadHistoryItem {
   filename: string;
   timestamp: number;
   extractedData: { code: string; grade: string }[];
-  fileId?: string; // ID for IndexedDB storage
+  fileId?: string;
 }
 
 const RETAKE_GRADES = ['D+', 'D', 'D-', 'E', 'F'];
+
 export const LINKED_SUBJECTS: Record<string, string> = {
   'UQI 10102': 'UQI 10202',
   'UQI 10202': 'UQI 10102'
 };
 
+// Per-program record
+type ProgramSubjects = Record<string, SubjectRecord>;
+type ProgramHistory = UploadHistoryItem[];
+
 interface ProgressState {
-  completedSubjects: Record<string, SubjectRecord>;
-  alerts: Alert[];
-  uploadHistory: UploadHistoryItem[];
-  
-  // Computed getter
-  getTotalCredits: () => number;
-  
+  // Keyed by program_code (e.g. 'BIT', 'BIK')
+  allSubjects: Record<string, ProgramSubjects>;
+  allHistory: Record<string, ProgramHistory>;
+  allAlerts: Record<string, Alert[]>;
+
+  // Active program helpers — components call these with the active program_code
+  getSubjects: (programCode: string) => ProgramSubjects;
+  getAlerts: (programCode: string) => Alert[];
+  getHistory: (programCode: string) => ProgramHistory;
+  getTotalCredits: (programCode: string, linkedSubjects?: [string, string][]) => number;
+
   // Actions
-  markComplete: (code: string, grade: string, credits: number) => void;
-  markIncomplete: (code: string) => void;
-  upsertSubject: (code: string, grade: string, credits: number) => void;
-  addUploadHistory: (filename: string, data: { code: string; grade: string }[], fileId?: string) => void;
-  deleteUploadHistory: (id: string) => void;
-  checkAlerts: () => void;
+  markComplete: (programCode: string, code: string, grade: string, credits: number) => void;
+  markIncomplete: (programCode: string, code: string) => void;
+  upsertSubject: (programCode: string, code: string, grade: string, credits: number) => void;
+  addUploadHistory: (programCode: string, filename: string, data: { code: string; grade: string }[], fileId?: string) => void;
+  deleteUploadHistory: (programCode: string, id: string) => void;
+  checkAlerts: (programCode: string) => void;
+  resetProgram: (programCode: string) => void;
   resetAll: () => void;
+}
+
+// ─── Migration helper: detect old flat format and upgrade ─────────────────────
+function migrateOldData(raw: any): Pick<ProgressState, 'allSubjects' | 'allHistory' | 'allAlerts'> {
+  // New format: has allSubjects key
+  if (raw?.allSubjects) return raw;
+
+  // Old format: had completedSubjects flat dict
+  const oldSubjects: Record<string, SubjectRecord> = raw?.completedSubjects ?? {};
+  const oldHistory: UploadHistoryItem[] = raw?.uploadHistory ?? [];
+  const oldAlerts: Alert[] = raw?.alerts ?? [];
+
+  // If old data has BIT-prefixed keys or generic known codes, assign to BIT
+  const hasBitKeys = Object.keys(oldSubjects).some(k =>
+    k.startsWith('BIT') || k.startsWith('UHB') || k.startsWith('UQI') || k.startsWith('UQ')
+  );
+
+  const programCode = hasBitKeys ? 'BIT' : 'UNKNOWN';
+
+  return {
+    allSubjects: { [programCode]: oldSubjects },
+    allHistory: { [programCode]: oldHistory },
+    allAlerts: { [programCode]: oldAlerts },
+  };
 }
 
 export const useProgressStore = create<ProgressState>()(
   persist(
     immer((set, get) => ({
-      completedSubjects: {},
-      alerts: [],
-      uploadHistory: [],
+      allSubjects: {},
+      allHistory: {},
+      allAlerts: {},
 
-      getTotalCredits: () => {
-        const { completedSubjects } = get();
+      getSubjects: (programCode) => get().allSubjects[programCode] ?? {},
+      getAlerts: (programCode) => get().allAlerts[programCode] ?? [],
+      getHistory: (programCode) => get().allHistory[programCode] ?? [],
+
+      getTotalCredits: (programCode, linkedSubjects = []) => {
+        const subjects = get().getSubjects(programCode);
         let total = 0;
         const countedLinks = new Set<string>();
-        
-        for (const [code, data] of Object.entries(completedSubjects)) {
-          // If retake required, don't count credits
+
+        for (const [code, data] of Object.entries(subjects)) {
           if (RETAKE_GRADES.includes(data.grade)) continue;
-          
-          // Deduplicate linked subjects (UQI 10102 / 10202)
+
+          // Deduplicate built-in linked subjects (Islam/Moral)
           if (LINKED_SUBJECTS[code]) {
             const partner = LINKED_SUBJECTS[code];
-            if (countedLinks.has(partner)) continue; // Already counted the other one
+            if (countedLinks.has(partner)) continue;
             countedLinks.add(code);
           }
 
-          // If PSM II, check if PSM I is passed
-          if (code === 'BIT 34204') {
-            const psm1 = completedSubjects['BIT 34002'];
-            if (!psm1 || RETAKE_GRADES.includes(psm1.grade)) {
-              continue;
-            }
+          // Deduplicate curriculum-defined linked subjects
+          const pair = linkedSubjects.find(([a, b]) => a === code || b === code);
+          if (pair) {
+            const key = pair.join('|');
+            if (countedLinks.has(key)) continue;
+            countedLinks.add(key);
           }
-          
+
+          // PSM II prerequisite
+          if (code.includes('34204')) {
+            const psmKey = Object.keys(subjects).find(k => k.includes('34002'));
+            if (!psmKey || RETAKE_GRADES.includes(subjects[psmKey].grade)) continue;
+          }
+
           total += data.credits;
         }
-        
         return total;
       },
 
-      markComplete: (code, grade, credits) => {
+      markComplete: (programCode, code, grade, credits) => {
         set((state) => {
-          state.completedSubjects[code] = { grade, credits };
-          // Handle linking
+          if (!state.allSubjects[programCode]) state.allSubjects[programCode] = {};
+          state.allSubjects[programCode][code] = { grade, credits };
           const partner = LINKED_SUBJECTS[code];
-          if (partner) {
-            state.completedSubjects[partner] = { grade, credits };
-          }
+          if (partner) state.allSubjects[programCode][partner] = { grade, credits };
         });
-        get().checkAlerts();
+        get().checkAlerts(programCode);
       },
 
-      upsertSubject: (code, grade, credits) => {
+      upsertSubject: (programCode, code, grade, credits) => {
         set((state) => {
-          const existing = state.completedSubjects[code];
+          if (!state.allSubjects[programCode]) state.allSubjects[programCode] = {};
+          const existing = state.allSubjects[programCode][code];
           if (!existing || gradeRank(grade) > gradeRank(existing.grade)) {
-            state.completedSubjects[code] = { grade, credits };
-            // Handle linking
+            state.allSubjects[programCode][code] = { grade, credits };
             const partner = LINKED_SUBJECTS[code];
-            if (partner) {
-              state.completedSubjects[partner] = { grade, credits };
-            }
+            if (partner) state.allSubjects[programCode][partner] = { grade, credits };
           }
         });
-        get().checkAlerts();
+        get().checkAlerts(programCode);
       },
 
-      markIncomplete: (code) => {
+      markIncomplete: (programCode, code) => {
         set((state) => {
-          delete state.completedSubjects[code];
-          // Handle linking
+          if (!state.allSubjects[programCode]) return;
+          delete state.allSubjects[programCode][code];
           const partner = LINKED_SUBJECTS[code];
-          if (partner) {
-            delete state.completedSubjects[partner];
-          }
+          if (partner) delete state.allSubjects[programCode][partner];
         });
-        get().checkAlerts();
+        get().checkAlerts(programCode);
       },
 
-      addUploadHistory: (filename, data, fileId) => {
+      addUploadHistory: (programCode, filename, data, fileId) => {
         set((state) => {
-          state.uploadHistory.push({
+          if (!state.allHistory[programCode]) state.allHistory[programCode] = [];
+          state.allHistory[programCode].push({
             id: crypto.randomUUID(),
             filename,
             timestamp: Date.now(),
             extractedData: data,
-            fileId
+            fileId,
           });
         });
       },
 
-      deleteUploadHistory: (id) => {
+      deleteUploadHistory: (programCode, id) => {
         set((state) => {
-          const index = state.uploadHistory.findIndex(h => h.id === id);
+          if (!state.allHistory[programCode]) return;
+          const index = state.allHistory[programCode].findIndex(h => h.id === id);
           if (index !== -1) {
-            const historyItem = state.uploadHistory[index];
-            // Remove subjects that were part of this upload
-            if (historyItem.extractedData) {
-              historyItem.extractedData.forEach(item => {
-                delete state.completedSubjects[item.code];
+            const item = state.allHistory[programCode][index];
+            if (!state.allSubjects[programCode]) state.allSubjects[programCode] = {};
+            if (item.extractedData) {
+              item.extractedData.forEach(ex => {
+                delete state.allSubjects[programCode][ex.code];
               });
-            } else if ((historyItem as any).codes) {
-              // Handle legacy schema
-              (historyItem as any).codes.forEach((code: string) => {
-                delete state.completedSubjects[code];
+            } else if ((item as any).codes) {
+              (item as any).codes.forEach((code: string) => {
+                delete state.allSubjects[programCode][code];
               });
             }
-            state.uploadHistory.splice(index, 1);
+            state.allHistory[programCode].splice(index, 1);
           }
         });
-        get().checkAlerts();
+        get().checkAlerts(programCode);
       },
 
-      checkAlerts: () => {
+      checkAlerts: (programCode) => {
         set((state) => {
+          const subjects = state.allSubjects[programCode] ?? {};
           const newAlerts: Alert[] = [];
-          
-          for (const [code, data] of Object.entries(state.completedSubjects)) {
-            // (a) retake-required grades
+
+          for (const [code, data] of Object.entries(subjects)) {
             if (RETAKE_GRADES.includes(data.grade)) {
               newAlerts.push({
                 type: 'retake',
                 code,
-                message: `Retake required for ${code} (Grade: ${data.grade}). Credits not counted.`
+                message: `Retake required for ${code} (Grade: ${data.grade}). Credits not counted.`,
               });
             }
-
-            // (b) PSM II prerequisite
-            if (code === 'BIT 34204') {
-              const psm1 = state.completedSubjects['BIT 34002'];
-              if (!psm1 || RETAKE_GRADES.includes(psm1.grade)) {
+            if (code.includes('34204')) {
+              const psmKey = Object.keys(subjects).find(k => k.includes('34002'));
+              if (!psmKey || RETAKE_GRADES.includes(subjects[psmKey].grade)) {
                 newAlerts.push({
                   type: 'prerequisite',
                   code,
-                  message: `Cannot count BIT 34204 (PSM II). Prerequisite BIT 34002 (PSM I) must be passed first.`
+                  message: `Cannot count PSM II. Prerequisite PSM I must be passed first.`,
                 });
               }
             }
           }
-          
-          state.alerts = newAlerts;
+          if (!state.allAlerts[programCode]) state.allAlerts[programCode] = [];
+          state.allAlerts[programCode] = newAlerts;
+        });
+      },
+
+      resetProgram: (programCode) => {
+        set((state) => {
+          delete state.allSubjects[programCode];
+          delete state.allHistory[programCode];
+          delete state.allAlerts[programCode];
         });
       },
 
       resetAll: () => {
         set((state) => {
-          state.completedSubjects = {};
-          state.alerts = [];
-          state.uploadHistory = [];
+          state.allSubjects = {};
+          state.allHistory = {};
+          state.allAlerts = {};
         });
-      }
+      },
     })),
     {
-      name: 'bit-progress-storage',
+      name: 'uthmpelan-progress-storage',
       partialize: (state) => ({
-        completedSubjects: state.completedSubjects,
-        alerts: state.alerts,
-        uploadHistory: state.uploadHistory,
+        allSubjects: state.allSubjects,
+        allHistory: state.allHistory,
+        allAlerts: state.allAlerts,
       }),
+      merge: (persisted: any, current) => {
+        // Run migration on load
+        const migrated = migrateOldData(persisted);
+        return { ...current, ...migrated };
+      },
     }
   )
 );

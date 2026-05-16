@@ -1,6 +1,5 @@
 import { gradeRank } from '@/lib/gradeUtils';
-import curriculumData from '@/data/curriculum.json';
-import electivesData from '@/data/electives.json';
+import type { ParsedSubject } from '@/store/curriculumStore';
 
 export type ExtractedSubject = {
   code: string;
@@ -10,57 +9,58 @@ export type ExtractedSubject = {
 // More flexible regex to capture 2-4 letters and 2-5 digits/wildcards
 export const SUBJECT_REGEX = /([A-Z]{2,4}\s?[\d\*]{2,5})\s+.+?\s+([A-F][+-]?|[DE][+-]?)/g;
 
-// List of all subjects for pattern matching
-const CURRICULUM_POOL: { code: string; credits: number; pattern: RegExp }[] = [];
+// Pool is rebuilt per-curriculum dynamically
+type PoolEntry = { code: string; credits: number; pattern: RegExp };
 
-function preparePool() {
-  const all = [
-    ...curriculumData.curriculum.flatMap(y => y.semesters.flatMap(s => s.subjects)),
-    ...electivesData
-  ];
-
-  all.forEach(sub => {
-    // Strip (I), (II), etc. before creating the regex pattern
-    const strippedSuffix = sub.code.replace(/\s*\([IV]+\)$/i, '');
+function buildPool(subjects: ParsedSubject[]): PoolEntry[] {
+  const pool: PoolEntry[] = [];
+  subjects.forEach(sub => {
+    // Strip internal uniqueness suffix (e.g. "UQ 11 (I)" → "UQ 11") before building regex
+    const strippedSuffix = sub.code.replace(/\s*\([IVX]+\)$/i, '');
     const clean = strippedSuffix.replace(/\s+/g, '').toUpperCase();
-    
-    // Convert wildcard * to regex . and escape other chars
-    const patternStr = '^' + clean.replace(/[\-\[\]\/\{\}\(\)\+\?\.\\\^\$\|]/g, "\\$&").replace(/\*/g, '.') + '$';
-    CURRICULUM_POOL.push({
-      code: sub.code, // Keep original code like "UQ 11 (I)"
+    const patternStr = '^' + clean.replace(/[\-\[\]\/\{\}\(\)\+\?\.\\\^\$\|]/g, '\\$&').replace(/\*/g, '.') + '$';
+    pool.push({
+      code: sub.code,
       credits: sub.credits,
-      pattern: new RegExp(patternStr)
+      pattern: new RegExp(patternStr),
     });
   });
+  return pool;
 }
 
-preparePool();
-
-function findMatchingStandardCodes(extractedCode: string): string[] {
-  const stripped = extractedCode.replace(/\s+/g, '').toUpperCase();
-  
-  // Normalize Aliases
-  let target = stripped;
-  // Map UQD / UQL -> UQ (Co-curricular)
+function normaliseCode(raw: string): string {
+  let target = raw.replace(/\s+/g, '').toUpperCase();
+  // Map UQD / UQL / UQS → UQ (Co-curricular)
   if (target.startsWith('UQD') || target.startsWith('UQL') || target.startsWith('UQS')) {
     target = 'UQ' + target.slice(3);
   }
-  
-  const matches = CURRICULUM_POOL.filter(item => item.pattern.test(target));
+  return target;
+}
+
+function findMatchingStandardCodes(
+  extractedCode: string,
+  pool: PoolEntry[],
+): string[] {
+  const target = normaliseCode(extractedCode);
+  const matches = pool.filter(item => item.pattern.test(target));
   if (matches.length > 0) return matches.map(m => m.code);
 
-  // Fallback for generic UQ 11 if the target just starts with UQ and is short
+  // Fallback: generic UQ → first UQ 11 variant
   if (target.startsWith('UQ') && target.length >= 4) {
-    return CURRICULUM_POOL.filter(p => p.code.startsWith('UQ 11')).map(m => m.code);
+    return pool.filter(p => p.code.startsWith('UQ 11')).map(m => m.code);
   }
-
   return [];
 }
 
-export function extractSubjects(rawTexts: string[]): ExtractedSubject[] {
+export function extractSubjects(
+  rawTexts: string[],
+  curriculumSubjects: ParsedSubject[],
+): ExtractedSubject[] {
   const combinedText = rawTexts.join('\n');
   const results: ExtractedSubject[] = [];
   const allocatedSlots = new Set<string>();
+
+  const pool = buildPool(curriculumSubjects);
 
   SUBJECT_REGEX.lastIndex = 0;
 
@@ -69,7 +69,7 @@ export function extractSubjects(rawTexts: string[]): ExtractedSubject[] {
     const rawCode = match[1];
     const grade = match[2].toUpperCase();
 
-    const standardCodes = findMatchingStandardCodes(rawCode);
+    const standardCodes = findMatchingStandardCodes(rawCode, pool);
     if (standardCodes.length === 0) continue;
 
     let allocated = false;
@@ -82,8 +82,8 @@ export function extractSubjects(rawTexts: string[]): ExtractedSubject[] {
       }
     }
 
+    // If all slots are filled, upgrade grade on first slot if better
     if (!allocated) {
-      // If all slots are filled, check if we can improve the grade of the first slot
       const firstCode = standardCodes[0];
       const existingIndex = results.findIndex(r => r.code === firstCode);
       if (existingIndex !== -1 && gradeRank(grade) > gradeRank(results[existingIndex].grade)) {
