@@ -354,7 +354,7 @@ export function TranscriptUploader() {
                           <div className="space-y-1.5 max-h-[200px] sm:max-h-[300px] overflow-y-auto pr-1">
                             {item.extractedData?.map((ex, i) => (
                               <div key={i} className="flex items-center justify-between p-2 rounded-lg glass text-xs">
-                                <span className="font-mono font-bold text-white">{ex.code}</span>
+                                <span className="font-mono font-bold text-white">{ex.code.replace(/\s*\([IV]+\)$/i, '')}</span>
                                 <Badge variant="secondary" className="font-bold text-[10px]">{ex.grade}</Badge>
                               </div>
                             )) || (

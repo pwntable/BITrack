@@ -20,11 +20,14 @@ function preparePool() {
   ];
 
   all.forEach(sub => {
-    const clean = sub.code.replace(/\s+/g, '').toUpperCase();
+    // Strip (I), (II), etc. before creating the regex pattern
+    const strippedSuffix = sub.code.replace(/\s*\([IV]+\)$/i, '');
+    const clean = strippedSuffix.replace(/\s+/g, '').toUpperCase();
+    
     // Convert wildcard * to regex . and escape other chars
     const patternStr = '^' + clean.replace(/[\-\[\]\/\{\}\(\)\+\?\.\\\^\$\|]/g, "\\$&").replace(/\*/g, '.') + '$';
     CURRICULUM_POOL.push({
-      code: sub.code,
+      code: sub.code, // Keep original code like "UQ 11 (I)"
       credits: sub.credits,
       pattern: new RegExp(patternStr)
     });
@@ -33,7 +36,7 @@ function preparePool() {
 
 preparePool();
 
-function findMatchingStandardCode(extractedCode: string): string | null {
+function findMatchingStandardCodes(extractedCode: string): string[] {
   const stripped = extractedCode.replace(/\s+/g, '').toUpperCase();
   
   // Normalize Aliases
@@ -42,26 +45,22 @@ function findMatchingStandardCode(extractedCode: string): string | null {
   if (target.startsWith('UQD') || target.startsWith('UQL') || target.startsWith('UQS')) {
     target = 'UQ' + target.slice(3);
   }
-  // Map UHB (English) - ensure it follows standard prefix if needed
   
-  for (const item of CURRICULUM_POOL) {
-    if (item.pattern.test(target)) {
-      return item.code;
-    }
-  }
+  const matches = CURRICULUM_POOL.filter(item => item.pattern.test(target));
+  if (matches.length > 0) return matches.map(m => m.code);
 
   // Fallback for generic UQ 11 if the target just starts with UQ and is short
   if (target.startsWith('UQ') && target.length >= 4) {
-    const uqMatch = CURRICULUM_POOL.find(p => p.code.startsWith('UQ 11'));
-    if (uqMatch) return uqMatch.code;
+    return CURRICULUM_POOL.filter(p => p.code.startsWith('UQ 11')).map(m => m.code);
   }
 
-  return null;
+  return [];
 }
 
 export function extractSubjects(rawTexts: string[]): ExtractedSubject[] {
   const combinedText = rawTexts.join('\n');
-  const subjectMap = new Map<string, string>(); // Maps standardized code to best grade
+  const results: ExtractedSubject[] = [];
+  const allocatedSlots = new Set<string>();
 
   SUBJECT_REGEX.lastIndex = 0;
 
@@ -70,17 +69,28 @@ export function extractSubjects(rawTexts: string[]): ExtractedSubject[] {
     const rawCode = match[1];
     const grade = match[2].toUpperCase();
 
-    const standardCode = findMatchingStandardCode(rawCode);
-    if (!standardCode) continue;
+    const standardCodes = findMatchingStandardCodes(rawCode);
+    if (standardCodes.length === 0) continue;
 
-    const existingGrade = subjectMap.get(standardCode);
-    if (!existingGrade || gradeRank(grade) > gradeRank(existingGrade)) {
-      subjectMap.set(standardCode, grade);
+    let allocated = false;
+    for (const sc of standardCodes) {
+      if (!allocatedSlots.has(sc)) {
+        allocatedSlots.add(sc);
+        results.push({ code: sc, grade });
+        allocated = true;
+        break;
+      }
+    }
+
+    if (!allocated) {
+      // If all slots are filled, check if we can improve the grade of the first slot
+      const firstCode = standardCodes[0];
+      const existingIndex = results.findIndex(r => r.code === firstCode);
+      if (existingIndex !== -1 && gradeRank(grade) > gradeRank(results[existingIndex].grade)) {
+        results[existingIndex].grade = grade;
+      }
     }
   }
 
-  return Array.from(subjectMap.entries()).map(([code, grade]) => ({
-    code,
-    grade,
-  }));
+  return results;
 }

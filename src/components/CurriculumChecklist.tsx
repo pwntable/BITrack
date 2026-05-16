@@ -170,7 +170,7 @@ export function CurriculumChecklist() {
                                 <div className="flex flex-col gap-0.5">
                                   <div className="flex items-center gap-2">
                                     <span className={`font-mono text-xs font-bold tracking-wide ${isCompleted ? 'text-primary' : 'text-white'}`}>
-                                      {subject.code}
+                                      {subject.code.replace(/\s*\([IV]+\)$/i, '')}
                                     </span>
                                     {!prereqMet && !isCompleted && (
                                       <span title={`Requires ${subject.prerequisite}`}>
