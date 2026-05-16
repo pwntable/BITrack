@@ -9,7 +9,11 @@ import type { ParsedCurriculum, ParsedYear, ParsedSemester, ParsedSubject } from
 
 export type ParseStep = 'loading' | 'extracting-text' | 'running-ocr' | 'merging' | 'building-structure' | 'done' | 'error';
 export interface ParseProgress { step: ParseStep; message: string; progress: number; }
-export interface ParseResult { curriculum: ParsedCurriculum; warnings: string[]; }
+export interface ParseResult {
+  curriculum: ParsedCurriculum;
+  warnings: string[];
+  debug?: import('@/lib/imageScraperPipeline').ExtractionResult;
+}
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 
@@ -626,6 +630,62 @@ async function extractLinesViaOCR(
   }
 }
 
+// Wrapper that returns both lines and raw text for pipeline integration
+async function extractLinesViaOCRWithRaw(
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<{ lines: PdfLine[]; rawText: string }> {
+  try {
+    const Tesseract = await import('tesseract.js');
+    const worker = await Tesseract.createWorker('eng', 1, {
+      logger: (m: any) => {
+        if (m.status === 'recognizing text' && onProgress) {
+          onProgress(Math.round(m.progress * 100));
+        }
+      },
+    });
+
+    const getCanvasBlob = async (canvas: HTMLCanvasElement): Promise<Blob> =>
+      new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('Canvas toBlob failed')), 'image/png'));
+
+    let rawText = '';
+
+    if (file.type === 'application/pdf') {
+      const pdfjsLib = await import('pdfjs-dist');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = getPdfWorkerSrc();
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      for (let p = 1; p <= Math.min(pdf.numPages, 4); p++) {
+        const page = await pdf.getPage(p);
+        const viewport = page.getViewport({ scale: 2.5 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext('2d')!, viewport } as any).promise;
+        const blob = await getCanvasBlob(canvas);
+        const { data: { text } } = await worker.recognize(blob);
+        rawText += '\n' + text;
+      }
+    } else {
+      const { data: { text } } = await worker.recognize(file);
+      rawText = text;
+    }
+
+    await worker.terminate();
+
+    const lines = rawText
+      .split('\n')
+      .map((text, i) => ({ text: text.trim(), x: 0, y: 10000 - i * 12 }))
+      .filter(l => l.text.length > 0);
+
+    return { lines, rawText };
+  } catch (err) {
+    console.error('[pelanParser] OCR failed:', err);
+    return { lines: [], rawText: '' };
+  }
+}
+
 // ─── Dedup unique slot suffix ─────────────────────────────────────────────────
 
 function assignUniqueSlots(subjects: ParsedSubject[]): ParsedSubject[] {
@@ -687,12 +747,17 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
   const isImage = file.type.startsWith('image/');
   let bestLines: PdfLine[] = [];
   let isColumnar = false;
+  let ocrRawText = '';
+  let usedOCR = false;
 
   if (isImage) {
     onProgress({ step: 'running-ocr', message: 'Running OCR on image…', progress: 20 });
-    bestLines = await extractLinesViaOCR(file, pct =>
+    const { lines, rawText } = await extractLinesViaOCRWithRaw(file, pct =>
       onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 20 + Math.round(pct * 0.5) })
     );
+    bestLines = lines;
+    ocrRawText = rawText;
+    usedOCR = true;
   } else {
     onProgress({ step: 'extracting-text', message: 'Extracting text…', progress: 15 });
     const pdfResult = await extractLinesFromPDF(file);
@@ -708,13 +773,15 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
     if (subjectCount < 3) {
       // Fall back to OCR for scanned PDFs
       onProgress({ step: 'running-ocr', message: 'Scanned PDF detected — running OCR…', progress: 30 });
-      const ocrLines = await extractLinesViaOCR(file, pct =>
+      const { lines: ocrLines, rawText } = await extractLinesViaOCRWithRaw(file, pct =>
         onProgress({ step: 'running-ocr', message: `OCR: ${pct}%`, progress: 30 + Math.round(pct * 0.4) })
       );
       const ocrCount = ocrLines.filter(l => parseSubjectLine(l.text) !== null).length;
       if (ocrCount > subjectCount) {
         bestLines = ocrLines;
         isColumnar = false;
+        ocrRawText = rawText;
+        usedOCR = true;
       }
     }
 
@@ -723,13 +790,50 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
 
   onProgress({ step: 'building-structure', message: 'Building curriculum structure…', progress: 82 });
 
+  // If OCR was used, run the image scraper pipeline for debug + better extraction
+  let debug: import('@/lib/imageScraperPipeline').ExtractionResult | undefined;
+  if (usedOCR && ocrRawText) {
+    const { runImageExtractionPipeline } = await import('@/lib/imageScraperPipeline');
+    debug = runImageExtractionPipeline(ocrRawText, isImage ? 'image' : 'scanned_pdf');
+  }
+
   // Use columnar parser if columnar extraction was used, otherwise standard parser
   const parsed = isColumnar ? parseColumnarResults(bestLines) : parseTableLines(bestLines);
   const linked = detectLinkedSubjects(bestLines);
 
-  const totalSubjects = parsed.years.reduce(
+  let totalSubjects = parsed.years.reduce(
     (a, y) => a + y.semesters.reduce((b, s) => b + s.rows.length, 0), 0
   );
+
+  // If pipeline found more subjects than old parser, use pipeline results
+  if (debug && debug.courses.length > totalSubjects) {
+    // Rebuild parsed table from pipeline courses
+    const yearMap: Record<number, Record<number, RawRow[]>> = {};
+    for (const c of debug.courses) {
+      if (!yearMap[c.year]) yearMap[c.year] = {};
+      if (!yearMap[c.year][c.semester]) yearMap[c.year][c.semester] = [];
+      yearMap[c.year][c.semester].push({
+        code: c.course_code, name: c.course_name,
+        credits: c.credit, is_elective: c.is_elective,
+      });
+    }
+    parsed.years = Object.keys(yearMap).map(Number).sort().map(yr => ({
+      year: yr,
+      semesters: Object.keys(yearMap[yr]).map(Number).sort().map(sm => ({
+        sem: sm, rows: yearMap[yr][sm],
+      })),
+    }));
+    parsed.electivePool = debug.elective_pool.map(c => ({
+      code: c.course_code, name: c.course_name,
+      credits: c.credit, is_elective: true,
+    }));
+    if (debug.program_code !== 'UNK') parsed.programCode = debug.program_code;
+    if (debug.program_name !== 'Unknown') parsed.programName = debug.program_name;
+    if (debug.faculty) parsed.faculty = debug.faculty;
+    if (debug.session) parsed.session = debug.session;
+    if (debug.total_credits_found) parsed.totalCredits = debug.total_credits_found;
+    totalSubjects = debug.courses.length;
+  }
 
   if (totalSubjects === 0) {
     warnings.push('Could not detect subject rows automatically. Please review and edit the extracted data manually.');
@@ -742,5 +846,5 @@ export async function parsePelanPengajian(file: File, onProgress: (p: ParseProgr
 
   const curriculum = buildCurriculum(parsed, linked, file.name);
   onProgress({ step: 'done', message: 'Done!', progress: 100 });
-  return { curriculum, warnings };
+  return { curriculum, warnings, debug };
 }

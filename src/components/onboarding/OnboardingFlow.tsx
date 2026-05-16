@@ -5,8 +5,10 @@ import { GraduationCap, ShieldCheck, BookOpen } from 'lucide-react';
 import { PelanUploader } from '@/components/onboarding/PelanUploader';
 import { ParseProgressView } from '@/components/onboarding/ParseProgressView';
 import { ReviewTable } from '@/components/onboarding/ReviewTable';
+import { ExtractionDebugPanel } from '@/components/onboarding/ExtractionDebugPanel';
 import { useCurriculumStore, BIT_DEMO_CURRICULUM, type ParsedCurriculum } from '@/store/curriculumStore';
-import { parsePelanPengajian, type ParseProgress } from '@/lib/pelanParser';
+import { parsePelanPengajian, type ParseProgress, type ParseResult } from '@/lib/pelanParser';
+import type { ExtractionResult } from '@/lib/imageScraperPipeline';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 
@@ -20,10 +22,7 @@ export function OnboardingFlow({ onComplete }: { onComplete?: () => void } = {})
     message: 'Starting...',
     progress: 0,
   });
-  const [parsedResult, setParsedResult] = useState<{
-    curriculum: ParsedCurriculum;
-    warnings: string[];
-  } | null>(null);
+  const [parsedResult, setParsedResult] = useState<ParseResult | null>(null);
 
   const handleFileSelected = async (file: File) => {
     setStep('parsing');
@@ -156,6 +155,12 @@ export function OnboardingFlow({ onComplete }: { onComplete?: () => void } = {})
                 Verify the parsed subjects below. You can edit any field before confirming.
               </p>
             </div>
+
+            {/* Debug panel (only shown when OCR pipeline was used) */}
+            {parsedResult.debug && (
+              <ExtractionDebugPanel debug={parsedResult.debug} />
+            )}
+
             <ReviewTable
               curriculum={parsedResult.curriculum}
               warnings={parsedResult.warnings}
