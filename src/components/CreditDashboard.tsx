@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useProgressStore } from '@/store/progressStore';
 import { calculateCGPA } from '@/lib/gradeUtils';
+import curriculumData from '@/data/curriculum.json';
 import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, Lock, CheckCircle, RotateCcw, BookOpen, ArrowRight } from 'lucide-react';
 
@@ -43,6 +44,11 @@ export function CreditDashboard() {
   // Compute metrics
   const retakeCount = alerts.filter(a => a.type === 'retake').length;
   const passedSubjectsCount = Object.keys(completedSubjects).length - retakeCount;
+  
+  const totalSubjects = curriculumData.curriculum.reduce((acc, year) => 
+    acc + year.semesters.reduce((semAcc, sem) => semAcc + sem.subjects.length, 0), 0
+  );
+  const remainingSubjectsCount = Math.max(0, totalSubjects - passedSubjectsCount);
 
   // SVG parameters
   const size = 200;
@@ -165,32 +171,41 @@ export function CreditDashboard() {
       </AlertDialog>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="glass rounded-xl p-5 hover:shadow-xl hover:shadow-teal-accent/5 transition-all duration-300 group">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-teal-accent/5 transition-all duration-300 group">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Total Passed</span>
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Total Passed</span>
             <CheckCircle className="h-4 w-4 text-green-400 opacity-60 group-hover:opacity-100 transition-opacity" />
           </div>
-          <div className="text-3xl font-extrabold text-white">{passedSubjectsCount}</div>
+          <div className="text-2xl sm:text-3xl font-extrabold text-white">{passedSubjectsCount}</div>
           <p className="text-[10px] text-muted-foreground mt-1">subjects completed</p>
         </div>
 
-        <div className="glass rounded-xl p-5 hover:shadow-xl hover:shadow-amber-accent/5 transition-all duration-300 group">
+        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-amber-accent/5 transition-all duration-300 group">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Retake Required</span>
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Retake Required</span>
             <RotateCcw className="h-4 w-4 text-amber-400 opacity-60 group-hover:opacity-100 transition-opacity" />
           </div>
-          <div className={`text-3xl font-extrabold ${retakeCount > 0 ? 'text-amber-400' : 'text-white'}`}>{retakeCount}</div>
+          <div className={`text-2xl sm:text-3xl font-extrabold ${retakeCount > 0 ? 'text-amber-400' : 'text-white'}`}>{retakeCount}</div>
           <p className="text-[10px] text-muted-foreground mt-1">needs attention</p>
         </div>
 
-        <div className="glass rounded-xl p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
+        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Remaining</span>
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Remaining Credits</span>
+            <ArrowRight className="h-4 w-4 text-primary opacity-60 group-hover:opacity-100 transition-opacity" />
+          </div>
+          <div className="text-2xl sm:text-3xl font-extrabold text-white">{remainingCredits}</div>
+          <p className="text-[10px] text-muted-foreground mt-1">credits to go</p>
+        </div>
+
+        <div className="glass rounded-xl p-4 sm:p-5 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 group">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-muted-foreground">Remaining Subs</span>
             <BookOpen className="h-4 w-4 text-primary opacity-60 group-hover:opacity-100 transition-opacity" />
           </div>
-          <div className="text-3xl font-extrabold text-white">{remainingCredits}</div>
-          <p className="text-[10px] text-muted-foreground mt-1">credits to go</p>
+          <div className="text-2xl sm:text-3xl font-extrabold text-white">{remainingSubjectsCount}</div>
+          <p className="text-[10px] text-muted-foreground mt-1">subjects left</p>
         </div>
       </div>
 
